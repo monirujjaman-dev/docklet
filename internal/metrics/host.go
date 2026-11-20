@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -18,7 +19,7 @@ type Host struct {
 	proc     string // usually /proc; /host/proc when Docklet runs in a container
 	diskPath string // filesystem to report (Docklet's data directory)
 	prev     *counters
-	cores    int
+	cores    atomic.Int64 // read concurrently by Status
 }
 
 // NewHost returns a host sampler. procRoot is "/proc" on the host; inside a
@@ -29,7 +30,7 @@ func NewHost(procRoot, diskPath string) *Host {
 }
 
 // Cores returns the number of CPUs seen in the last sample.
-func (h *Host) Cores() int { return h.cores }
+func (h *Host) Cores() int { return int(h.cores.Load()) }
 
 // Sample reads the current values. The first call returns zero rates.
 func (h *Host) Sample(now time.Time) (Sample, error) {
@@ -40,7 +41,8 @@ func (h *Host) Sample(now time.Time) (Sample, error) {
 	if err != nil {
 		return s, err
 	}
-	c.cpuUsage, c.cpuTotal, h.cores = busy, total, cores
+	c.cpuUsage, c.cpuTotal = busy, total
+	h.cores.Store(int64(cores))
 
 	memTotal, memAvail, err := readMeminfo(filepath.Join(h.proc, "meminfo"))
 	if err != nil {
