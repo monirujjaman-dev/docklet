@@ -34,6 +34,11 @@ const (
 	ActionTOTPEnabled     = "account.totp_enabled"
 	ActionTOTPDisabled    = "account.totp_disabled"
 	ActionPasswordReset   = "admin.password_reset"
+
+	ActionPanelDomainSet     = "settings.panel_domain_set"
+	ActionPanelDomainCleared = "settings.panel_domain_cleared"
+	ActionPanelVerified      = "settings.panel_verified"
+	ActionPanelVerifyFailed  = "settings.panel_verify_failed"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

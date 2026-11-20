@@ -101,3 +101,34 @@ func TestResetPasswordUnknownUserAndMissingDB(t *testing.T) {
 		t.Fatalf("unknown user: exit %d, %q", code, errb.String())
 	}
 }
+
+func TestClearPanelDomain(t *testing.T) {
+	dir := t.TempDir()
+	seedUser(t, dir)
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{"panel_domain": "p.example.com", "panel_status": "active"} {
+		if err := st.Q.PutSetting(ctx, db.PutSettingParams{Key: k, Value: v, UpdatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = st.Close()
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"admin", "clear-panel-domain", "-data-dir", dir}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	st, _ = store.Open(ctx, dbPath(dir))
+	defer func() { _ = st.Close() }()
+	if _, err := st.Q.GetSetting(ctx, "panel_domain"); err == nil {
+		t.Fatal("panel_domain still set")
+	}
+	var action string
+	_ = st.DB.QueryRow("SELECT action FROM audit_log ORDER BY id DESC LIMIT 1").Scan(&action)
+	if action != "settings.panel_domain_cleared" {
+		t.Fatalf("last audit action = %q", action)
+	}
+}

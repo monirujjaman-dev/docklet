@@ -52,7 +52,10 @@ func newTestEnv(t *testing.T) (*httptest.Server, *testEnv) {
 		t.Fatal(err)
 	}
 	clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
-	s := New(Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)), st, box, WithClock(clock.Now))
+	s, err := New(Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)), st, box, WithClock(clock.Now))
+	if err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts, &testEnv{ts: ts, st: st, clock: clock}

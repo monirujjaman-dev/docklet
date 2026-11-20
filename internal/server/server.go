@@ -4,11 +4,13 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/monirujjaman-dev/docklet/internal/caddy"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
@@ -17,18 +19,35 @@ import (
 
 // Config controls how the HTTP server listens.
 type Config struct {
+	// Addr is the direct-access address (e.g. ":3000"). Once a panel domain
+	// is verified, Docklet binds only 127.0.0.1 on the same port.
 	Addr string
+	// CaddyAdmin is the Caddy Admin API URL; empty disables Caddy integration.
+	CaddyAdmin string
 }
 
 // Server is the Docklet control-plane HTTP server.
 type Server struct {
-	cfg          Config
-	log          *slog.Logger
-	st           *store.Store
-	box          *secrets.Box
-	now          func() time.Time
-	loginLimiter *rateLimiter
-	http         *http.Server
+	cfg           Config
+	caddyInterval time.Duration
+	log           *slog.Logger
+	st            *store.Store
+	box           *secrets.Box
+	now           func() time.Time
+	loginLimiter  *rateLimiter
+	http          *http.Server
+	lm            *listenerMgr
+
+	caddy     *caddy.Reconciler
+	caddyOpts caddy.Options
+
+	runCtx         context.Context
+	prober         func(ctx context.Context, url string) (string, error)
+	verifyTimeout  time.Duration
+	verifyInterval time.Duration
+	panelMu        sync.Mutex
+	panelNonce     string
+	verifyCancel   context.CancelFunc
 }
 
 // Option customises a Server (used by tests).
@@ -37,11 +56,39 @@ type Option func(*Server)
 // WithClock overrides the time source.
 func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
 
+// WithProber overrides the HTTPS self-check used to verify the panel domain.
+func WithProber(p func(ctx context.Context, url string) (string, error)) Option {
+	return func(s *Server) { s.prober = p }
+}
+
+// WithPanelVerify overrides how long and how often the panel domain is probed.
+func WithPanelVerify(timeout, interval time.Duration) Option {
+	return func(s *Server) { s.verifyTimeout, s.verifyInterval = timeout, interval }
+}
+
+// WithCaddyOptions sets extra Caddy options (ports), mainly for tests.
+func WithCaddyOptions(o caddy.Options) Option { return func(s *Server) { s.caddyOpts = o } }
+
+// WithCaddyInterval sets the reconcile interval.
+func WithCaddyInterval(d time.Duration) Option {
+	return func(s *Server) { s.caddyInterval = d }
+}
+
 // New builds a Server with all routes registered.
-func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts ...Option) *Server {
-	s := &Server{cfg: cfg, log: log, st: st, box: box, now: time.Now}
+func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts ...Option) (*Server, error) {
+	s := &Server{
+		cfg: cfg, log: log, st: st, box: box, now: time.Now,
+		prober: defaultProber, verifyTimeout: 90 * time.Second, verifyInterval: 3 * time.Second,
+	}
 	for _, o := range opts {
 		o(s)
+	}
+	if cfg.CaddyAdmin != "" {
+		client, err := caddy.NewClient(cfg.CaddyAdmin)
+		if err != nil {
+			return nil, err
+		}
+		s.caddy = caddy.NewReconciler(client, s, log, s.caddyInterval)
 	}
 	// 10 attempts per minute per IP for login/setup, on top of per-account lockout.
 	s.loginLimiter = newRateLimiter(10, time.Minute, func() time.Time { return s.now() })
@@ -52,7 +99,8 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	return s
+	s.lm = newListenerMgr(s.http)
+	return s, nil
 }
 
 // Handler exposes the root handler (used by tests).
@@ -82,6 +130,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/audit", authed(s.handleAuditList))
 	mux.HandleFunc("GET /api/audit/verify", authed(s.handleAuditVerify))
 
+	mux.HandleFunc("GET /api/settings/panel", authed(s.handleGetPanel))
+	mux.HandleFunc("PUT /api/settings/panel", authed(s.handlePutPanel))
+	mux.HandleFunc("DELETE /api/settings/panel", authed(s.handleDeletePanel))
+	mux.HandleFunc("GET /api/panel/probe", s.handlePanelProbe)
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
@@ -91,19 +144,38 @@ func (s *Server) routes() http.Handler {
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.cfg.Addr)
+	s.panelMu.Lock()
+	s.runCtx = ctx
+	s.panelMu.Unlock()
+
+	panel, err := s.panelState(ctx)
 	if err != nil {
 		return err
 	}
-	s.log.Info("listening", "addr", ln.Addr().String())
+	addr := s.cfg.Addr
+	if panel.Status == panelActive {
+		port, err := portOf(addr)
+		if err != nil {
+			return err
+		}
+		addr = loopbackAddr(port)
+		s.log.Info("panel domain active; direct access limited to localhost", "domain", panel.Domain)
+	}
+	if err := s.lm.listen(addr); err != nil {
+		return err
+	}
+	s.log.Info("listening", "addr", s.lm.addr())
 
 	go s.janitor(ctx)
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- s.http.Serve(ln) }()
+	if s.caddy != nil {
+		go s.caddy.Run(ctx)
+		if panel.Status == panelPending {
+			s.startPanelVerify(panel.Domain)
+		}
+	}
 
 	select {
-	case err := <-errCh:
+	case err := <-s.lm.errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -137,6 +209,26 @@ func (s *Server) janitor(ctx context.Context) {
 			s.loginLimiter.prune()
 		}
 	}
+}
+
+// Addr returns the current listen address.
+func (s *Server) Addr() string { return s.lm.addr() }
+
+func (s *Server) baseCtx() context.Context {
+	s.panelMu.Lock()
+	defer s.panelMu.Unlock()
+	if s.runCtx != nil {
+		return s.runCtx
+	}
+	return context.Background()
+}
+
+func portOf(addr string) (int, error) {
+	_, p, err := splitHostPort(addr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	return p, nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

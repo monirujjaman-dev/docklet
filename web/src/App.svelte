@@ -7,10 +7,12 @@
   import Overview from "./pages/Overview.svelte";
   import Audit from "./pages/Audit.svelte";
   import Account from "./pages/Account.svelte";
+  import Settings from "./pages/Settings.svelte";
 
   const nav = [
     { href: "/", label: "Overview" },
     { href: "/audit", label: "Audit log" },
+    { href: "/settings", label: "Settings" },
     { href: "/account", label: "Account" },
   ];
 
@@ -55,6 +57,8 @@
     <main class="flex-1 p-8 overflow-auto">
       {#if router.path.startsWith("/audit")}
         <Audit />
+      {:else if router.path.startsWith("/settings")}
+        <Settings />
       {:else if router.path.startsWith("/account")}
         <Account />
       {:else}
