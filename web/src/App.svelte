@@ -1,57 +1,65 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type VersionInfo } from "./lib/api";
+  import { session } from "./lib/session.svelte";
+  import { router, link } from "./lib/router.svelte";
+  import Setup from "./pages/Setup.svelte";
+  import Login from "./pages/Login.svelte";
+  import Overview from "./pages/Overview.svelte";
+  import Audit from "./pages/Audit.svelte";
+  import Account from "./pages/Account.svelte";
 
-  let healthy = $state<boolean | null>(null);
-  let info = $state<VersionInfo | null>(null);
+  const nav = [
+    { href: "/", label: "Overview" },
+    { href: "/audit", label: "Audit log" },
+    { href: "/account", label: "Account" },
+  ];
 
-  onMount(async () => {
-    try {
-      const [h, v] = await Promise.all([
-        api<{ status: string }>("/health"),
-        api<VersionInfo>("/version"),
-      ]);
-      healthy = h.status === "ok";
-      info = v;
-    } catch {
-      healthy = false;
-    }
-  });
+  const active = (href: string) => (href === "/" ? router.path === "/" : router.path.startsWith(href));
+
+  onMount(() => session.init());
 </script>
 
-<div class="min-h-screen flex flex-col">
-  <header class="border-b border-neutral-800 px-6 py-4 flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <span class="text-lg font-semibold tracking-tight">Docklet</span>
-      {#if info}
-        <span class="text-xs text-neutral-500">{info.version}</span>
+{#if session.phase === "loading"}
+  <div class="min-h-screen grid place-items-center text-neutral-500 text-sm">Loading…</div>
+{:else if session.phase === "error"}
+  <div class="min-h-screen grid place-items-center p-6 text-center">
+    <div>
+      <p class="text-red-400 mb-3">Cannot reach the control plane: {session.error}</p>
+      <button onclick={() => session.init()} class="rounded-md border border-neutral-700 px-3 py-1.5 text-sm">Retry</button>
+    </div>
+  </div>
+{:else if session.phase === "setup"}
+  <Setup />
+{:else if session.phase === "login"}
+  <Login />
+{:else}
+  <div class="min-h-screen flex">
+    <aside class="w-52 shrink-0 border-r border-neutral-800 p-4 flex flex-col">
+      <div class="text-lg font-semibold tracking-tight mb-6 px-2">Docklet</div>
+      <nav class="space-y-1 flex-1">
+        {#each nav as item}
+          <a
+            href={item.href}
+            use:link
+            class="block rounded-md px-2 py-1.5 text-sm {active(item.href)
+              ? 'bg-neutral-800 text-white'
+              : 'text-neutral-400 hover:text-white hover:bg-neutral-900'}">{item.label}</a
+          >
+        {/each}
+      </nav>
+      <div class="border-t border-neutral-800 pt-3 px-2 text-sm">
+        <p class="text-neutral-300">{session.user?.username}</p>
+        <button onclick={() => session.logout()} class="text-neutral-500 hover:text-white text-xs mt-1">Sign out</button>
+      </div>
+    </aside>
+    <main class="flex-1 p-8 overflow-auto">
+      {#if router.path.startsWith("/audit")}
+        <Audit />
+      {:else if router.path.startsWith("/account")}
+        <Account />
+      {:else}
+        <Overview />
       {/if}
-    </div>
-    <div class="flex items-center gap-2 text-sm">
-      <span
-        class="h-2 w-2 rounded-full {healthy === null
-          ? 'bg-neutral-500'
-          : healthy
-            ? 'bg-emerald-500'
-            : 'bg-red-500'}"
-      ></span>
-      <span class="text-neutral-400">
-        {healthy === null ? "Connecting…" : healthy ? "Control plane online" : "Unreachable"}
-      </span>
-    </div>
-  </header>
-
-  <main class="flex-1 grid place-items-center p-6">
-    <div class="text-center max-w-md">
-      <h1 class="text-2xl font-semibold mb-2">Your control plane is running</h1>
-      <p class="text-neutral-400">
-        Apps, databases and services will appear here. Setup and login arrive in M1.
-      </p>
-      {#if info}
-        <p class="mt-6 text-xs text-neutral-600 font-mono">
-          {info.commit} · {info.go} · {info.os}/{info.arch}
-        </p>
-      {/if}
-    </div>
-  </main>
-</div>
+    </main>
+  </div>
+{/if}
