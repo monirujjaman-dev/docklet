@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
+	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
@@ -105,6 +106,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 		"host cgroup v2 root for container metrics (env DOCKLET_HOST_CGROUP)")
 	retentionDays := fs.Int("metrics-retention-days", envInt("DOCKLET_METRICS_RETENTION_DAYS", 7),
 		"days of one-minute metrics to keep; 0 disables metrics (env DOCKLET_METRICS_RETENTION_DAYS)")
+	buildTimeout := fs.Duration("build-timeout", envDuration("DOCKLET_BUILD_TIMEOUT", 20*time.Minute),
+		"maximum time for one Git build (env DOCKLET_BUILD_TIMEOUT)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -153,9 +156,18 @@ func cmdServe(args []string, stderr io.Writer) int {
 		dc := docker.New(*dockerSocket)
 		statsAPI = dc
 		opts = append(opts, server.WithDocker(dc))
-		if names := splitList(*attach); len(names) > 0 {
-			opts = append(opts, server.WithAppsTuning(func(s *apps.Service) { s.AttachContainers = names }))
+		names := splitList(*attach)
+		builder := build.New("unix://"+*dockerSocket, filepath.Join(*dataDir, "builds"), 1, *buildTimeout)
+		if err := builder.Available(); err != nil {
+			log.Warn("Git builds disabled", "reason", err)
+			builder = nil
 		}
+		opts = append(opts, server.WithAppsTuning(func(s *apps.Service) {
+			s.AttachContainers = names
+			if builder != nil {
+				s.Builder = builder
+			}
+		}))
 	}
 	if *retentionDays > 0 {
 		mc := metrics.New(st, statsAPI, metrics.Config{Proc: *hostProc, CgroupRoot: *hostCgroup, DiskPath: *dataDir}, log)
@@ -203,6 +215,15 @@ func parsePrefixes(v string) ([]netip.Prefix, error) {
 		out = append(out, pf.Masked())
 	}
 	return out, nil
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
 }
 
 func envInt(key string, def int) int {

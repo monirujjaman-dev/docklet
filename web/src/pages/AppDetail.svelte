@@ -5,6 +5,7 @@
   import { parseEnv } from "../lib/env";
   import StatusBadge from "../lib/StatusBadge.svelte";
   import MetricsPanel from "../lib/MetricsPanel.svelte";
+  import GitSource from "../lib/GitSource.svelte";
 
   let { appId }: { appId: string } = $props();
 
@@ -73,7 +74,7 @@
       await api(`/apps/${appId}`, {
         method: "PATCH",
         json: {
-          image: cfg.image.trim(),
+          ...(app?.sourceType === "git" ? {} : { image: cfg.image.trim() }),
           port: cfg.port ? Number(cfg.port) : 0,
           memoryMb: cfg.memoryMb ? Number(cfg.memoryMb) : 0,
           cpuMillis: cfg.cpus ? Math.round(Number(cfg.cpus) * 1000) : 0,
@@ -129,6 +130,18 @@
   }
 
   // --- Deployments ---
+  async function rollback(d: Deployment) {
+    if (!confirm(`Roll back to deployment #${d.id}${d.commitSha ? ` (${d.commitSha.slice(0, 7)})` : ""}? Its image is redeployed as-is, without a build.`)) return;
+    error = "";
+    try {
+      const res = await api<{ deploymentId: number }>(`/apps/${appId}/rollback`, { json: { deploymentId: d.id } });
+      await load();
+      await showDeployment(res.deploymentId);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   let openDep = $state<Deployment | null>(null);
   async function showDeployment(id: number) {
     openDep = await api<Deployment>(`/deployments/${id}`);
@@ -212,7 +225,11 @@
         <StatusBadge status={app.runtimeStatus} />
         {#if inProgress}<StatusBadge status="pending" />{/if}
       </h1>
-      <p class="text-xs text-neutral-500 font-mono mt-1">{app.image}</p>
+      {#if app.sourceType === "git" && app.git}
+        <p class="text-xs text-neutral-500 font-mono mt-1">{app.git.url} · {app.git.branch}</p>
+      {:else}
+        <p class="text-xs text-neutral-500 font-mono mt-1">{app.image}</p>
+      {/if}
     </div>
     <div class="flex flex-wrap gap-2 text-sm">
       <button
@@ -232,6 +249,9 @@
   </div>
 
   {#if app.runtimeMessage}<p class="text-sm text-amber-300 mb-2">{app.runtimeMessage}</p>{/if}
+  {#if app.sourceType === "git" && !app.buildsAvailable}
+    <p class="text-sm text-amber-300 mb-2">Builds are unavailable on this server: install git, openssh-client and the docker CLI with buildx.</p>
+  {/if}
   {#if error}<p class="text-sm text-red-400 mb-2">{error}</p>{/if}
 
   <nav class="flex gap-1 border-b border-neutral-800 mb-6 mt-4">
@@ -262,8 +282,10 @@
       <section class="space-y-3">
         <h2 class="font-medium">Configuration</h2>
         <div class="grid grid-cols-2 gap-3 text-sm">
-          <label class="col-span-2">Image
-            <input bind:value={cfg.image} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 font-mono" /></label>
+          {#if app.sourceType !== "git"}
+            <label class="col-span-2">Image
+              <input bind:value={cfg.image} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 font-mono" /></label>
+          {/if}
           <label>Port
             <input bind:value={cfg.port} placeholder="auto" class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2" /></label>
           <label>Restart
@@ -282,6 +304,11 @@
       </section>
     </div>
     {#if saveMsg}<p class="text-sm text-emerald-300 mt-4">{saveMsg}</p>{/if}
+    {#if app.sourceType === "git" && app.git}
+      <div class="mt-10 pt-6 border-t border-neutral-800">
+        <GitSource {app} onchange={(a) => (app = a)} />
+      </div>
+    {/if}
   {:else if tab === "metrics"}
     {#if app.runtimeStatus !== "running"}
       <p class="text-sm text-neutral-500 mb-4">The app is not running; live data is paused and stored history is shown.</p>
@@ -314,16 +341,27 @@
     <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
       <div class="rounded-md border border-neutral-800 divide-y divide-neutral-800">
         {#each app.deployments as d (d.id)}
-          <button onclick={() => showDeployment(d.id)} class="w-full text-left px-3 py-2.5 hover:bg-neutral-900 {openDep?.id === d.id ? 'bg-neutral-900' : ''}">
-            <div class="flex items-center gap-3 text-sm">
-              <span class="font-mono text-neutral-500">#{d.id}</span>
-              <StatusBadge status={d.status} />
-              {#if d.current}<span class="text-xs text-emerald-400">current</span>{/if}
-              <span class="ml-auto text-xs text-neutral-500">{fmt(d.createdAt)}</span>
-            </div>
-            <div class="text-xs text-neutral-500 font-mono mt-1 truncate">{d.image} · by {d.createdBy}</div>
-            {#if d.error}<div class="text-xs text-red-300 mt-1 truncate">{d.error}</div>{/if}
-          </button>
+          <div class="flex items-stretch hover:bg-neutral-900 {openDep?.id === d.id ? 'bg-neutral-900' : ''}">
+            <button onclick={() => showDeployment(d.id)} class="flex-1 min-w-0 text-left px-3 py-2.5">
+              <div class="flex items-center gap-3 text-sm">
+                <span class="font-mono text-neutral-500">#{d.id}</span>
+                <StatusBadge status={d.status} />
+                {#if d.current}<span class="text-xs text-emerald-400">current</span>{/if}
+                {#if d.source === "rollback"}<span class="text-xs text-neutral-400">rollback of #{d.rollbackOf}</span>{/if}
+                <span class="ml-auto text-xs text-neutral-500">{fmt(d.createdAt)}</span>
+              </div>
+              {#if d.commitSha}
+                <div class="text-xs text-neutral-300 mt-1 truncate">
+                  <span class="font-mono text-neutral-500">{d.commitSha.slice(0, 7)}</span> {d.commitMessage}
+                </div>
+              {/if}
+              <div class="text-xs text-neutral-500 font-mono mt-1 truncate">{d.image || (d.status === "queued" || d.status === "running" ? "building…" : "no image")} · by {d.createdBy}</div>
+              {#if d.error}<div class="text-xs text-red-300 mt-1 truncate">{d.error}</div>{/if}
+            </button>
+            {#if d.rollbackable}
+              <button onclick={() => rollback(d)} class="self-center mr-3 rounded-md border border-neutral-700 hover:border-neutral-500 px-2 py-1 text-xs whitespace-nowrap">Roll back</button>
+            {/if}
+          </div>
         {:else}
           <p class="px-3 py-4 text-sm text-neutral-500">No deployments yet.</p>
         {/each}

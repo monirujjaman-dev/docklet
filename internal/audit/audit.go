@@ -54,6 +54,11 @@ const (
 	ActionAppStopped       = "app.stopped"
 	ActionAppRestarted     = "app.restarted"
 	ActionContainerMissing = "app.container_missing"
+
+	ActionAppGitUpdated     = "app.git_updated"
+	ActionAppDeployKey      = "app.deploy_key_regenerated" // #nosec G101 -- audit action name, not a credential
+	ActionAppWebhookRotated = "app.webhook_rotated"
+	ActionAppRollback       = "app.rollback_requested"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

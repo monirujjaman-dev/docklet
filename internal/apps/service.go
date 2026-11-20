@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
@@ -38,6 +39,10 @@ const (
 	DeploySuperseded = "superseded"
 
 	JobDeploy = "deploy"
+
+	SourceImage    = "image"
+	SourceGit      = "git"
+	SourceRollback = "rollback"
 )
 
 // ErrNoDeployment means the app has never been deployed successfully.
@@ -48,6 +53,7 @@ type Docker interface {
 	Ping(ctx context.Context) (string, error)
 	ImagePull(ctx context.Context, ref string, progress func(string)) error
 	ImageInspect(ctx context.Context, ref string) (docker.Image, error)
+	ImageRemove(ctx context.Context, ref string) error
 	NetworkEnsure(ctx context.Context, name string, labels map[string]string) error
 	NetworkAttach(ctx context.Context, network, container string) error
 	NetworkRemove(ctx context.Context, name string) error
@@ -59,6 +65,11 @@ type Docker interface {
 	ContainerInspect(ctx context.Context, id string) (docker.ContainerInfo, error)
 	ContainerList(ctx context.Context, labels map[string]string) ([]docker.ContainerSummary, error)
 	ContainerLogs(ctx context.Context, id string, o docker.LogOptions, fn func(docker.LogLine) error) error
+}
+
+// Builder clones and builds Git sources (internal/build).
+type Builder interface {
+	Build(ctx context.Context, spec build.Spec, logf func(string)) (build.Result, error)
 }
 
 // Proxy applies routing changes synchronously (Caddy reconciler).
@@ -84,6 +95,11 @@ type Service struct {
 	ReconcileInterval time.Duration
 	HealthCheck       func(ctx context.Context, ip string, port int) error
 
+	// Builder builds Git sources; nil disables Git deployments.
+	Builder Builder
+	// KeepImages is how many built images per app are kept for rollback.
+	KeepImages int
+
 	// AttachContainers are joined to every project network. Set it when
 	// Docklet and Caddy run in containers (e.g. Docker Desktop) so they can
 	// reach app containers by IP.
@@ -99,8 +115,8 @@ func New(st *store.Store, dk Docker, box *secrets.Box, log *slog.Logger, proxy P
 		st: st, dk: dk, box: box, log: log, proxy: proxy, now: time.Now,
 		Workers: 2, HealthTimeout: 60 * time.Second, HealthInterval: 500 * time.Millisecond,
 		DrainDelay: 2 * time.Second, StopTimeoutSec: 10, ReconcileInterval: 30 * time.Second,
-		HealthCheck: tcpCheck,
-		wake:        make(chan struct{}, 1),
+		HealthCheck: tcpCheck, KeepImages: 5,
+		wake: make(chan struct{}, 1),
 	}
 }
 
@@ -156,14 +172,49 @@ func (s *Service) Ping(ctx context.Context) error {
 // EnqueueDeploy records a deployment and a job inside the caller's transaction.
 // Call Wake after the transaction commits.
 func (s *Service) EnqueueDeploy(ctx context.Context, q *db.Queries, app db.App, actor string) (db.Deployment, error) {
-	now := s.now().Unix()
-	dep, err := q.CreateDeployment(ctx, db.CreateDeploymentParams{AppID: app.ID, Image: app.Image, CreatedBy: actor, CreatedAt: now})
+	p := db.CreateDeploymentParams{AppID: app.ID, Image: app.Image, Source: SourceImage, CreatedBy: actor, CreatedAt: s.now().Unix()}
+	if app.SourceType == SourceGit {
+		p.Image, p.Source = "", SourceGit // set once the build finishes
+	}
+	return s.enqueue(ctx, q, p)
+}
+
+// ErrNotRollbackable explains why a deployment cannot be rolled back to.
+var ErrNotRollbackable = errors.New("that deployment's image is no longer available")
+
+// EnqueueRollback redeploys the exact image of an earlier deployment,
+// without pulling or building.
+func (s *Service) EnqueueRollback(ctx context.Context, q *db.Queries, app db.App, target db.Deployment, actor string) (db.Deployment, error) {
+	if target.AppID != app.ID || target.ImageID == "" || target.ImagePruned == 1 ||
+		(target.Status != DeploySucceeded && target.Status != DeploySuperseded) {
+		return db.Deployment{}, ErrNotRollbackable
+	}
+	return s.enqueue(ctx, q, db.CreateDeploymentParams{
+		AppID: app.ID, Image: target.Image, ImageID: target.ImageID, Source: SourceRollback,
+		RollbackOf: sql.NullInt64{Int64: target.ID, Valid: true}, CreatedBy: actor, CreatedAt: s.now().Unix(),
+	})
+}
+
+func (s *Service) enqueue(ctx context.Context, q *db.Queries, p db.CreateDeploymentParams) (db.Deployment, error) {
+	dep, err := q.CreateDeployment(ctx, p)
 	if err != nil {
 		return dep, err
 	}
-	_, err = q.InsertJob(ctx, db.InsertJobParams{Kind: JobDeploy, RefID: dep.ID, CreatedAt: now})
+	_, err = q.InsertJob(ctx, db.InsertJobParams{Kind: JobDeploy, RefID: dep.ID, CreatedAt: p.CreatedAt})
 	return dep, err
 }
+
+// DeployKeyAAD binds an encrypted deploy key to its app.
+func DeployKeyAAD(appID int64) []byte { return []byte(fmt.Sprintf("app:%d:deploykey", appID)) }
+
+// WebhookSecretAAD binds an encrypted webhook secret to its app.
+func WebhookSecretAAD(appID int64) []byte { return []byte(fmt.Sprintf("app:%d:webhook", appID)) }
+
+// Seal encrypts a value with the master key (deploy keys, webhook secrets).
+func (s *Service) Seal(value, aad []byte) ([]byte, error) { return s.box.Seal(value, aad) }
+
+// Open decrypts a value sealed with Seal.
+func (s *Service) Open(value, aad []byte) ([]byte, error) { return s.box.Open(value, aad) }
 
 // Wake nudges the job workers.
 func (s *Service) Wake() {

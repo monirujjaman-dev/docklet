@@ -14,6 +14,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/audit"
+	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
@@ -84,6 +85,12 @@ type deploymentDTO struct {
 	FinishedAt  int64  `json:"finishedAt,omitempty"`
 	Log         string `json:"log,omitempty"`
 	Current     bool   `json:"current,omitempty"`
+
+	Source        string `json:"source"`
+	CommitSHA     string `json:"commitSha,omitempty"`
+	CommitMessage string `json:"commitMessage,omitempty"`
+	RollbackOf    int64  `json:"rollbackOf,omitempty"`
+	Rollbackable  bool   `json:"rollbackable,omitempty"`
 }
 
 type appDetail struct {
@@ -96,6 +103,10 @@ type appDetail struct {
 	Env           []envEntry      `json:"env"`
 	Deployments   []deploymentDTO `json:"deployments"`
 	CreatedAt     int64           `json:"createdAt"`
+
+	SourceType      string     `json:"sourceType"`
+	Git             *gitConfig `json:"git,omitempty"`
+	BuildsAvailable bool       `json:"buildsAvailable"`
 }
 
 func (s *Server) summarize(ctx context.Context, a db.App) (appSummary, error) {
@@ -370,6 +381,7 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 		Domains []string           `json:"domains"`
 		Env     map[string]*string `json:"env"`
 		Deploy  *bool              `json:"deploy"`
+		Git     *gitConfig         `json:"git"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		return err
@@ -378,8 +390,15 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 	if !resourceNameRe.MatchString(name) {
 		return errf(http.StatusBadRequest, "name must be 1-32 lowercase letters, digits or '-'")
 	}
-	if in.Image == nil {
-		return errf(http.StatusBadRequest, "image is required")
+	if in.Git != nil {
+		if in.Image != nil {
+			return errf(http.StatusBadRequest, "set either image or git, not both")
+		}
+		if err := in.Git.normalize(); err != nil {
+			return err
+		}
+	} else if in.Image == nil {
+		return errf(http.StatusBadRequest, "image (or git) is required")
 	}
 	app := db.App{RestartPolicy: "unless-stopped"}
 	if err := in.apply(&app); err != nil {
@@ -394,6 +413,10 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	deploy := in.Deploy == nil || *in.Deploy
+	// A private SSH repo can't be cloned until the deploy key is added.
+	if in.Git != nil && build.IsSSH(in.Git.URL) && in.Deploy == nil {
+		deploy = false
+	}
 
 	ctx := r.Context()
 	a := authFrom(ctx)
@@ -425,10 +448,15 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
+		if in.Git != nil {
+			if created, err = s.setupGitApp(ctx, q, created, *in.Git); err != nil {
+				return err
+			}
+		}
 		if _, err := audit.Append(ctx, q, audit.Entry{
 			ActorID: ptr(a.User.ID), Actor: a.User.Username, Action: audit.ActionAppCreated,
 			Target: fmt.Sprintf("app:%d", created.ID), IP: clientIP(r),
-			Details: map[string]any{"name": name, "image": app.Image, "domains": domains, "envKeys": keys},
+			Details: map[string]any{"name": name, "image": app.Image, "git": in.Git, "domains": domains, "envKeys": keys},
 		}, now); err != nil {
 			return err
 		}
@@ -489,16 +517,31 @@ func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) error {
 	}
 	dd := make([]deploymentDTO, 0, len(deps))
 	for _, d := range deps {
+		current := app.CurrentDeploymentID.Valid && app.CurrentDeploymentID.Int64 == d.ID
 		dd = append(dd, deploymentDTO{
 			ID: d.ID, Image: d.Image, Status: d.Status, Error: d.Error, Port: d.Port, ContainerID: shortID(d.ContainerID),
 			CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt, StartedAt: d.StartedAt, FinishedAt: d.FinishedAt,
-			Current: app.CurrentDeploymentID.Valid && app.CurrentDeploymentID.Int64 == d.ID,
+			Current: current, Source: d.Source, CommitSHA: d.CommitSha, CommitMessage: d.CommitMessage,
+			RollbackOf: d.RollbackOf.Int64,
+			Rollbackable: !current && d.ImageID != "" && d.ImagePruned == 0 &&
+				(d.Status == apps.DeploySucceeded || d.Status == apps.DeploySuperseded),
 		})
 	}
-	writeJSON(w, http.StatusOK, appDetail{
+	detail := appDetail{
 		appSummary: sum, ProjectName: project.Name, Port: app.Port, RestartPolicy: app.RestartPolicy,
 		CPUMillis: app.CpuMillis, MemoryMB: app.MemoryMb, Env: env, Deployments: dd, CreatedAt: app.CreatedAt,
-	})
+		SourceType: app.SourceType, BuildsAvailable: s.apps != nil && s.apps.Builder != nil,
+	}
+	if app.SourceType == apps.SourceGit {
+		detail.Git = &gitConfig{
+			URL: app.GitUrl, Branch: app.GitBranch, Context: app.BuildContext, Dockerfile: app.Dockerfile,
+			AutoDeploy: app.AutoDeploy == 1, DeployKey: app.DeployKeyPub, SSH: build.IsSSH(app.GitUrl),
+		}
+		if app.WebhookToken.Valid {
+			detail.Git.WebhookPath = "/api/webhooks/" + app.WebhookToken.String
+		}
+	}
+	writeJSON(w, http.StatusOK, detail)
 	return nil
 }
 
@@ -785,6 +828,7 @@ func (s *Server) handleGetDeployment(w http.ResponseWriter, r *http.Request) err
 	writeJSON(w, http.StatusOK, deploymentDTO{
 		ID: d.ID, Image: d.Image, Status: d.Status, Error: d.Error, Port: d.Port, ContainerID: shortID(d.ContainerID),
 		CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt, StartedAt: d.StartedAt, FinishedAt: d.FinishedAt, Log: d.Log,
+		Source: d.Source, CommitSHA: d.CommitSha, CommitMessage: d.CommitMessage, RollbackOf: d.RollbackOf.Int64,
 	})
 	return nil
 }

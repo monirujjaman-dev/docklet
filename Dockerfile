@@ -34,7 +34,8 @@ FROM alpine:3.21
 LABEL org.opencontainers.image.source="https://github.com/monirujjaman-dev/docklet" \
       org.opencontainers.image.description="Docklet: lightweight self-hosted PaaS on Docker and Caddy" \
       org.opencontainers.image.licenses="NOASSERTION"
-RUN apk add --no-cache ca-certificates tzdata
+# git, ssh and the docker CLI (with buildx) are used for Git builds.
+RUN apk add --no-cache ca-certificates tzdata git openssh-client docker-cli docker-cli-buildx
 COPY --from=build /out/docklet /usr/local/bin/docklet
 ENV DOCKLET_DATA_DIR=/var/lib/docklet
 VOLUME /var/lib/docklet

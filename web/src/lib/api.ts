@@ -106,6 +106,22 @@ export type Deployment = {
   finishedAt?: number;
   log?: string;
   current?: boolean;
+  source: "image" | "git" | "rollback";
+  commitSha?: string;
+  commitMessage?: string;
+  rollbackOf?: number;
+  rollbackable?: boolean;
+};
+
+export type GitConfig = {
+  url: string;
+  branch: string;
+  context: string;
+  dockerfile: string;
+  autoDeploy: boolean;
+  deployKey?: string;
+  ssh?: boolean;
+  webhookPath?: string;
 };
 
 export type AppDetail = AppSummary & {
@@ -117,4 +133,7 @@ export type AppDetail = AppSummary & {
   env: { key: string; updatedAt: number }[];
   deployments: Deployment[];
   createdAt: number;
+  sourceType: "image" | "git";
+  git?: GitConfig;
+  buildsAvailable: boolean;
 };
