@@ -25,6 +25,8 @@ Commands:
   serve                  Run the control plane
   audit verify           Verify the audit log hash chain (exit 1 if broken)
   admin reset-password   Reset a user's password and unlock the account
+  admin clear-panel-domain
+                         Remove the panel domain and re-enable direct access
   version                Print version information
 
 Run 'docklet <command> -h' for command flags.
@@ -53,6 +55,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 && args[1] == "reset-password" {
 			return cmdResetPassword(args[2:], stdout, stderr)
 		}
+		if len(args) > 1 && args[1] == "clear-panel-domain" {
+			return cmdClearPanelDomain(args[2:], stdout, stderr)
+		}
 	case "version", "--version", "-v":
 		fmt.Fprintln(stdout, version.Get().String())
 		return 0
@@ -77,6 +82,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	addr := fs.String("addr", envOr("DOCKLET_ADDR", ":3000"), "listen address (env DOCKLET_ADDR)")
 	dataDir := dataDirFlag(fs)
+	caddyAdmin := fs.String("caddy-admin", envOr("DOCKLET_CADDY_ADMIN", "http://localhost:2019"),
+		"Caddy Admin API URL, or 'off' to disable Caddy integration (env DOCKLET_CADDY_ADMIN)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -110,7 +117,15 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	defer func() { _ = st.Close() }()
 
-	srv := server.New(server.Config{Addr: *addr}, log, st, box)
+	cfg := server.Config{Addr: *addr, CaddyAdmin: *caddyAdmin}
+	if *caddyAdmin == "off" {
+		cfg.CaddyAdmin = ""
+	}
+	srv, err := server.New(cfg, log, st, box)
+	if err != nil {
+		log.Error("config", "err", err)
+		return 1
+	}
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server stopped", "err", err)
 		return 1

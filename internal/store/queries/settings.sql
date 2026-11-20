@@ -4,3 +4,6 @@ SELECT value FROM settings WHERE key = ?;
 -- name: PutSetting :exec
 INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE key = ?;

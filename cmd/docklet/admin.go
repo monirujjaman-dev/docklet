@@ -14,6 +14,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/audit"
 	"github.com/monirujjaman-dev/docklet/internal/auth"
+	"github.com/monirujjaman-dev/docklet/internal/server"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
@@ -142,5 +143,29 @@ func cmdResetPassword(args []string, stdout, stderr io.Writer) int {
 	if generated {
 		fmt.Fprintf(stdout, "New password: %s\n", password)
 	}
+	return 0
+}
+
+// cmdClearPanelDomain is the recovery path if the panel domain stops working
+// (for example DNS moved) while direct access is limited to localhost.
+func cmdClearPanelDomain(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("admin clear-panel-domain", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dataDir := dataDirFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+	st, err := openExisting(ctx, *dataDir)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	defer func() { _ = st.Close() }()
+	if err := server.ClearPanel(ctx, st.Tx, "cli", time.Now()); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "Panel domain removed. Restart docklet to re-enable direct access on its -addr.")
 	return 0
 }

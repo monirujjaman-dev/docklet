@@ -68,3 +68,14 @@ export type AuditEntry = {
 };
 
 export type AuditVerify = { ok: boolean; checked: number; brokenAt?: number; reason?: string };
+
+export type CaddyStatus = { reachable: boolean; lastSync?: string; lastError?: string };
+
+export type PanelState = {
+  domain: string;
+  acmeEmail: string;
+  status: "none" | "pending" | "active" | "failed";
+  message?: string;
+  listen: string;
+  caddy: CaddyStatus | null;
+};
