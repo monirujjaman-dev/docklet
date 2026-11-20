@@ -1,0 +1,20 @@
+# Build output
+/bin/
+internal/server/dist/*
+!internal/server/dist/.gitkeep
+
+# Frontend
+web/node_modules/
+web/.svelte-kit/
+
+# Local data
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.key
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
