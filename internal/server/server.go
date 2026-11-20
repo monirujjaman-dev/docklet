@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/caddy"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
@@ -41,6 +42,10 @@ type Server struct {
 	caddy     *caddy.Reconciler
 	caddyOpts caddy.Options
 
+	docker   apps.Docker
+	appsTune func(*apps.Service)
+	apps     *apps.Service
+
 	runCtx         context.Context
 	prober         func(ctx context.Context, url string) (string, error)
 	verifyTimeout  time.Duration
@@ -69,6 +74,12 @@ func WithPanelVerify(timeout, interval time.Duration) Option {
 // WithCaddyOptions sets extra Caddy options (ports), mainly for tests.
 func WithCaddyOptions(o caddy.Options) Option { return func(s *Server) { s.caddyOpts = o } }
 
+// WithDocker enables app deployments using the given Docker client.
+func WithDocker(d apps.Docker) Option { return func(s *Server) { s.docker = d } }
+
+// WithAppsTuning adjusts the apps service (timeouts etc.), mainly for tests.
+func WithAppsTuning(fn func(*apps.Service)) Option { return func(s *Server) { s.appsTune = fn } }
+
 // WithCaddyInterval sets the reconcile interval.
 func WithCaddyInterval(d time.Duration) Option {
 	return func(s *Server) { s.caddyInterval = d }
@@ -89,6 +100,17 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 			return nil, err
 		}
 		s.caddy = caddy.NewReconciler(client, s, log, s.caddyInterval)
+	}
+	if s.docker != nil {
+		var px apps.Proxy // stays a nil interface when Caddy is off
+		if s.caddy != nil {
+			px = s.caddy
+		}
+		s.apps = apps.New(st, s.docker, box, log, px)
+		s.apps.SetClock(s.now)
+		if s.appsTune != nil {
+			s.appsTune(s.apps)
+		}
 	}
 	// 10 attempts per minute per IP for login/setup, on top of per-account lockout.
 	s.loginLimiter = newRateLimiter(10, time.Minute, func() time.Time { return s.now() })
@@ -135,6 +157,22 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/settings/panel", authed(s.handleDeletePanel))
 	mux.HandleFunc("GET /api/panel/probe", s.handlePanelProbe)
 
+	mux.HandleFunc("GET /api/projects", authed(s.handleListProjects))
+	mux.HandleFunc("POST /api/projects", authed(s.handleCreateProject))
+	mux.HandleFunc("DELETE /api/projects/{id}", authed(s.handleDeleteProject))
+	mux.HandleFunc("POST /api/projects/{id}/apps", authed(s.handleCreateApp))
+	mux.HandleFunc("GET /api/apps/{id}", authed(s.handleGetApp))
+	mux.HandleFunc("PATCH /api/apps/{id}", authed(s.handleUpdateApp))
+	mux.HandleFunc("DELETE /api/apps/{id}", authed(s.handleDeleteApp))
+	mux.HandleFunc("PUT /api/apps/{id}/env", authed(s.handleUpdateEnv))
+	mux.HandleFunc("PUT /api/apps/{id}/domains", authed(s.handleUpdateDomains))
+	mux.HandleFunc("POST /api/apps/{id}/deploy", authed(s.handleDeploy))
+	mux.HandleFunc("POST /api/apps/{id}/start", authed(s.handleLifecycle("start")))
+	mux.HandleFunc("POST /api/apps/{id}/stop", authed(s.handleLifecycle("stop")))
+	mux.HandleFunc("POST /api/apps/{id}/restart", authed(s.handleLifecycle("restart")))
+	mux.HandleFunc("GET /api/apps/{id}/logs", authed(s.handleAppLogs))
+	mux.HandleFunc("GET /api/deployments/{id}", authed(s.handleGetDeployment))
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
@@ -172,6 +210,9 @@ func (s *Server) Run(ctx context.Context) error {
 		if panel.Status == panelPending {
 			s.startPanelVerify(panel.Domain)
 		}
+	}
+	if s.apps != nil {
+		go s.apps.Run(ctx)
 	}
 
 	select {

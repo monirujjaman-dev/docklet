@@ -39,6 +39,21 @@ const (
 	ActionPanelDomainCleared = "settings.panel_domain_cleared"
 	ActionPanelVerified      = "settings.panel_verified"
 	ActionPanelVerifyFailed  = "settings.panel_verify_failed"
+
+	ActionProjectCreated   = "project.created"
+	ActionProjectDeleted   = "project.deleted"
+	ActionAppCreated       = "app.created"
+	ActionAppUpdated       = "app.updated"
+	ActionAppDeleted       = "app.deleted"
+	ActionAppEnvUpdated    = "app.env_updated"
+	ActionAppDomains       = "app.domains_updated"
+	ActionDeployRequested  = "app.deploy_requested"
+	ActionDeploySucceeded  = "app.deploy_succeeded"
+	ActionDeployFailed     = "app.deploy_failed"
+	ActionAppStarted       = "app.started"
+	ActionAppStopped       = "app.stopped"
+	ActionAppRestarted     = "app.restarted"
+	ActionContainerMissing = "app.container_missing"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

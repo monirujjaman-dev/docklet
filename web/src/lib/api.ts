@@ -79,3 +79,42 @@ export type PanelState = {
   listen: string;
   caddy: CaddyStatus | null;
 };
+
+export type AppSummary = {
+  id: number;
+  projectId: number;
+  name: string;
+  image: string;
+  desiredStatus: "running" | "stopped";
+  runtimeStatus: string;
+  runtimeMessage?: string;
+  domains: string[];
+};
+
+export type Project = { id: number; name: string; createdAt: number; apps: AppSummary[] };
+
+export type Deployment = {
+  id: number;
+  image: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "superseded";
+  error?: string;
+  port: number;
+  containerId?: string;
+  createdBy: string;
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  log?: string;
+  current?: boolean;
+};
+
+export type AppDetail = AppSummary & {
+  projectName: string;
+  port: number;
+  restartPolicy: string;
+  cpuMillis: number;
+  memoryMb: number;
+  env: { key: string; updatedAt: number }[];
+  deployments: Deployment[];
+  createdAt: number;
+};

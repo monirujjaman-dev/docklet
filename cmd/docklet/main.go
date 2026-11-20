@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/server"
 	"github.com/monirujjaman-dev/docklet/internal/store"
@@ -84,6 +85,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 	dataDir := dataDirFlag(fs)
 	caddyAdmin := fs.String("caddy-admin", envOr("DOCKLET_CADDY_ADMIN", "http://localhost:2019"),
 		"Caddy Admin API URL, or 'off' to disable Caddy integration (env DOCKLET_CADDY_ADMIN)")
+	dockerSocket := fs.String("docker-socket", envOr("DOCKLET_DOCKER_SOCKET", "/var/run/docker.sock"),
+		"Docker Engine socket, or 'off' to disable app deployments (env DOCKLET_DOCKER_SOCKET)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -121,7 +124,11 @@ func cmdServe(args []string, stderr io.Writer) int {
 	if *caddyAdmin == "off" {
 		cfg.CaddyAdmin = ""
 	}
-	srv, err := server.New(cfg, log, st, box)
+	var opts []server.Option
+	if *dockerSocket != "off" {
+		opts = append(opts, server.WithDocker(docker.New(*dockerSocket)))
+	}
+	srv, err := server.New(cfg, log, st, box, opts...)
 	if err != nil {
 		log.Error("config", "err", err)
 		return 1

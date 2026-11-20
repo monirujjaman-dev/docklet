@@ -1,22 +1,29 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { session } from "./lib/session.svelte";
-  import { router, link } from "./lib/router.svelte";
+  import { router, link, match } from "./lib/router.svelte";
   import Setup from "./pages/Setup.svelte";
   import Login from "./pages/Login.svelte";
   import Overview from "./pages/Overview.svelte";
   import Audit from "./pages/Audit.svelte";
   import Account from "./pages/Account.svelte";
   import Settings from "./pages/Settings.svelte";
+  import NewApp from "./pages/NewApp.svelte";
+  import AppDetail from "./pages/AppDetail.svelte";
 
   const nav = [
-    { href: "/", label: "Overview" },
+    { href: "/", label: "Projects" },
     { href: "/audit", label: "Audit log" },
     { href: "/settings", label: "Settings" },
     { href: "/account", label: "Account" },
   ];
 
-  const active = (href: string) => (href === "/" ? router.path === "/" : router.path.startsWith(href));
+  const active = (href: string) =>
+    href === "/"
+      ? router.path === "/" || router.path.startsWith("/apps") || router.path.startsWith("/projects")
+      : router.path.startsWith(href);
+  const newAppRoute = $derived(match("/projects/:id/new", router.path));
+  const appRoute = $derived(match("/apps/:id", router.path));
 
   onMount(() => session.init());
 </script>
@@ -55,7 +62,11 @@
       </div>
     </aside>
     <main class="flex-1 p-8 overflow-auto">
-      {#if router.path.startsWith("/audit")}
+      {#if newAppRoute}
+        <NewApp projectId={newAppRoute.id} />
+      {:else if appRoute}
+        {#key appRoute.id}<AppDetail appId={appRoute.id} />{/key}
+      {:else if router.path.startsWith("/audit")}
         <Audit />
       {:else if router.path.startsWith("/settings")}
         <Settings />

@@ -16,6 +16,19 @@ class Router {
 
 export const router = new Router();
 
+/** Match a pattern like "/apps/:id" against a path; returns params or null. */
+export function match(pattern: string, path: string): Record<string, string> | null {
+  const p = pattern.split("/").filter(Boolean);
+  const a = path.split("/").filter(Boolean);
+  if (p.length !== a.length) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < p.length; i++) {
+    if (p[i].startsWith(":")) params[p[i].slice(1)] = decodeURIComponent(a[i]);
+    else if (p[i] !== a[i]) return null;
+  }
+  return params;
+}
+
 /** Svelte action: intercept same-origin link clicks. */
 export function link(node: HTMLAnchorElement) {
   const onClick = (e: MouseEvent) => {
