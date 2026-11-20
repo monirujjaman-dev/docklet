@@ -116,11 +116,12 @@ func (c *Client) AdminListen() string {
 
 // Config returns Caddy's current config (nil if empty).
 func (c *Client) Config(ctx context.Context) (any, error) {
+	// #nosec G704 -- base is the operator-configured Caddy admin URL
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/", nil)
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.hc.Do(req)
+	res, err := c.hc.Do(req) // #nosec G704 -- operator-configured admin URL
 	if err != nil {
 		return nil, fmt.Errorf("caddy: unreachable: %w", err)
 	}
@@ -145,12 +146,13 @@ func (c *Client) Load(ctx context.Context, cfg any) error {
 	if err != nil {
 		return err
 	}
+	// #nosec G704 -- base is the operator-configured Caddy admin URL
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/load", bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.hc.Do(req)
+	res, err := c.hc.Do(req) // #nosec G704 -- operator-configured admin URL
 	if err != nil {
 		return fmt.Errorf("caddy: unreachable: %w", err)
 	}

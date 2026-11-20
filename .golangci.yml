@@ -16,6 +16,10 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
 
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
     - gofmt

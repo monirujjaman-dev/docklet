@@ -65,7 +65,7 @@ func (r *Reconciler) Status() Status {
 func (r *Reconciler) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
-	r.Once(ctx)
+	_ = r.Once(ctx) // errors are recorded in Status
 	for {
 		select {
 		case <-ctx.Done():
@@ -73,7 +73,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 		case <-t.C:
 		case <-r.trigger:
 		}
-		r.Once(ctx)
+		_ = r.Once(ctx)
 	}
 }
 

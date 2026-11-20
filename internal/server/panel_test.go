@@ -54,6 +54,7 @@ type panelEnv struct {
 	caddy   *fakeCaddy
 	cancel  context.CancelFunc
 	done    chan error
+	runErr  error
 	probeOK bool
 	mu      sync.Mutex
 }
@@ -110,7 +111,7 @@ func startPanelServer(t *testing.T, dbPath string, probeOK bool) *panelEnv {
 func (e *panelEnv) stop() {
 	if e.cancel != nil {
 		e.cancel()
-		<-e.done
+		e.runErr = <-e.done
 		e.cancel = nil
 		_ = e.st.Close()
 	}

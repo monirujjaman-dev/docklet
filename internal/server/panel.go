@@ -277,12 +277,13 @@ func (s *Server) handlePanelProbe(w http.ResponseWriter, r *http.Request) {
 
 // defaultProber fetches url with normal certificate verification.
 func defaultProber(ctx context.Context, url string) (string, error) {
+	// #nosec G704 -- url is https://<admin-validated hostname>/api/panel/probe
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	hc := &http.Client{Timeout: 10 * time.Second}
-	res, err := hc.Do(req)
+	res, err := hc.Do(req) // #nosec G704 -- see above
 	if err != nil {
 		return "", err
 	}
