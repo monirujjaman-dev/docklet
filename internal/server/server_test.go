@@ -18,13 +18,20 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return ts
 }
 
+func closeBody(t *testing.T, res *http.Response) {
+	t.Helper()
+	if err := res.Body.Close(); err != nil {
+		t.Errorf("closing body: %v", err)
+	}
+}
+
 func TestHealth(t *testing.T) {
 	ts := newTestServer(t)
 	res, err := http.Get(ts.URL + "/api/health")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer closeBody(t, res)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
 	}
@@ -43,7 +50,7 @@ func TestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer closeBody(t, res)
 	var body map[string]string
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -59,7 +66,7 @@ func TestUnknownAPIRouteIs404JSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer closeBody(t, res)
 	if res.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", res.StatusCode)
 	}
@@ -76,7 +83,7 @@ func TestSPAFallbackServesHTML(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := io.ReadAll(res.Body)
-		res.Body.Close()
+		closeBody(t, res)
 		if res.StatusCode != http.StatusOK {
 			t.Fatalf("%s: status = %d, want 200", p, res.StatusCode)
 		}
@@ -92,7 +99,7 @@ func TestSecurityHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
+	closeBody(t, res)
 	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Content-Security-Policy"} {
 		if res.Header.Get(h) == "" {
 			t.Errorf("missing header %s", h)
@@ -106,7 +113,7 @@ func TestSPARejectsPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
+	closeBody(t, res)
 	if res.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", res.StatusCode)
 	}
