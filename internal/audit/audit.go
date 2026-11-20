@@ -86,10 +86,7 @@ func Append(ctx context.Context, q *db.Queries, e Entry, now time.Time) (db.Audi
 	}
 	row.Hash = Hash(row)
 
-	err = q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
-		ID: row.ID, Ts: row.Ts, ActorID: row.ActorID, Actor: row.Actor, Action: row.Action,
-		Target: row.Target, Ip: row.Ip, Details: row.Details, PrevHash: row.PrevHash, Hash: row.Hash,
-	})
+	err = q.InsertAuditEntry(ctx, db.InsertAuditEntryParams(row))
 	return row, err
 }
 

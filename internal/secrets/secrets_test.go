@@ -77,7 +77,7 @@ func TestLoadOrCreateKey(t *testing.T) {
 		t.Fatal("key changed on reload")
 	}
 
-	if err := os.Chmod(path, 0o644); err != nil {
+	if err := os.Chmod(path, 0o644); err != nil { // #nosec G302 -- deliberately insecure to test rejection
 		t.Fatal(err)
 	}
 	if _, err := LoadOrCreateKey(path); err == nil {

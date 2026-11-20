@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,7 +72,7 @@ func TestTxRollsBack(t *testing.T) {
 		}
 		return errBoom
 	})
-	if err != errBoom {
+	if !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v", err)
 	}
 	if n, _ := s.Q.CountUsers(ctx); n != 0 {

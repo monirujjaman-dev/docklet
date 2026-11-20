@@ -310,7 +310,7 @@ func totpCode(t *testing.T, secret string, now time.Time) string {
 		t.Fatal(err)
 	}
 	var msg [8]byte
-	binary.BigEndian.PutUint64(msg[:], uint64(now.Unix()/30))
+	binary.BigEndian.PutUint64(msg[:], uint64(now.Unix()/30)) // #nosec G115 -- positive test timestamps
 	m := hmac.New(sha1.New, key)
 	m.Write(msg[:])
 	sum := m.Sum(nil)

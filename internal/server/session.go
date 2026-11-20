@@ -55,13 +55,12 @@ func (s *Server) newSession(ctx context.Context, q *db.Queries, w http.ResponseW
 		Ip: clientIP(r), UserAgent: ua,
 		CreatedAt: now.Unix(), LastSeenAt: now.Unix(), ExpiresAt: now.Add(sessionMaxAge).Unix(),
 	}
-	if err := q.CreateSession(ctx, db.CreateSessionParams{
-		ID: sess.ID, UserID: sess.UserID, CsrfToken: sess.CsrfToken, Ip: sess.Ip, UserAgent: sess.UserAgent,
-		CreatedAt: sess.CreatedAt, LastSeenAt: sess.LastSeenAt, ExpiresAt: sess.ExpiresAt,
-	}); err != nil {
+	if err := q.CreateSession(ctx, db.CreateSessionParams(sess)); err != nil {
 		return db.Session{}, err
 	}
-	http.SetCookie(w, &http.Cookie{
+	// Secure is set whenever the request arrived over HTTPS. Before a panel
+	// domain is configured (M2) the dashboard is reached over plain HTTP.
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is conditional on HTTPS, see above
 		Name: sessionCookie, Value: token, Path: "/",
 		MaxAge: int(sessionMaxAge.Seconds()), HttpOnly: true, Secure: isHTTPS(r), SameSite: http.SameSiteStrictMode,
 	})
@@ -69,7 +68,7 @@ func (s *Server) newSession(ctx context.Context, q *db.Queries, w http.ResponseW
 }
 
 func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- Secure is conditional on HTTPS
 		Name: sessionCookie, Value: "", Path: "/", MaxAge: -1,
 		HttpOnly: true, Secure: isHTTPS(r), SameSite: http.SameSiteStrictMode,
 	})
