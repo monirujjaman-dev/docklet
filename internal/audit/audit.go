@@ -57,7 +57,7 @@ const (
 
 	ActionAppGitUpdated     = "app.git_updated"
 	ActionAppDeployKey      = "app.deploy_key_regenerated" // #nosec G101 -- audit action name, not a credential
-	ActionAppWebhookRotated = "app.webhook_rotated"
+	ActionAppWebhookRotated = "app.webhook_rotated" //nolint:gosec // audit action name, not a credential
 	ActionAppRollback       = "app.rollback_requested"
 )
 

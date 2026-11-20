@@ -181,7 +181,7 @@ func TestGitAppValidationAndSSHDefault(t *testing.T) {
 	_, p := c.do("POST", "/api/projects", map[string]string{"name": "web"})
 	url := fmt.Sprintf("/api/projects/%v/apps", p["id"])
 	for _, g := range []map[string]any{
-		{"url": "https://user:tok@github.com/o/r.git"},
+		{"url": "https://user:tok@github.com/o/r.git"}, //nolint:gosec // deliberately invalid URL: must be rejected
 		{"url": "file:///etc"},
 		{"url": "https://github.com/o/r.git", "branch": "-x"},
 		{"url": "https://github.com/o/r.git", "context": "../.."},
