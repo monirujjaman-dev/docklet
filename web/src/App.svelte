@@ -8,11 +8,13 @@
   import Audit from "./pages/Audit.svelte";
   import Account from "./pages/Account.svelte";
   import Settings from "./pages/Settings.svelte";
+  import Monitoring from "./pages/Monitoring.svelte";
   import NewApp from "./pages/NewApp.svelte";
   import AppDetail from "./pages/AppDetail.svelte";
 
   const nav = [
     { href: "/", label: "Projects" },
+    { href: "/monitoring", label: "Monitoring" },
     { href: "/audit", label: "Audit log" },
     { href: "/settings", label: "Settings" },
     { href: "/account", label: "Account" },
@@ -66,6 +68,8 @@
         <NewApp projectId={newAppRoute.id} />
       {:else if appRoute}
         {#key appRoute.id}<AppDetail appId={appRoute.id} />{/key}
+      {:else if router.path.startsWith("/monitoring")}
+        <Monitoring />
       {:else if router.path.startsWith("/audit")}
         <Audit />
       {:else if router.path.startsWith("/settings")}

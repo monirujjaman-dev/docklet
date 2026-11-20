@@ -272,6 +272,7 @@ type ContainerInfo struct {
 		ExitCode   int    `json:"ExitCode"`
 		Error      string `json:"Error"`
 		StartedAt  string `json:"StartedAt"`
+		Pid        int    `json:"Pid"`
 	} `json:"State"`
 	RestartCount    int `json:"RestartCount"`
 	NetworkSettings struct {
@@ -399,4 +400,38 @@ func streamName(b byte) string {
 		return "stderr"
 	}
 	return "stdout"
+}
+
+// Stats is the subset of the container stats response Docklet uses.
+type Stats struct {
+	CPUStats struct {
+		CPUUsage struct {
+			TotalUsage uint64 `json:"total_usage"` // nanoseconds
+		} `json:"cpu_usage"`
+		OnlineCPUs int `json:"online_cpus"`
+	} `json:"cpu_stats"`
+	MemoryStats struct {
+		Usage uint64            `json:"usage"`
+		Limit uint64            `json:"limit"`
+		Stats map[string]uint64 `json:"stats"`
+	} `json:"memory_stats"`
+	Networks map[string]struct {
+		RxBytes uint64 `json:"rx_bytes"`
+		TxBytes uint64 `json:"tx_bytes"`
+	} `json:"networks"`
+	BlkioStats struct {
+		IOServiceBytesRecursive []struct {
+			Op    string `json:"op"`
+			Value uint64 `json:"value"`
+		} `json:"io_service_bytes_recursive"`
+	} `json:"blkio_stats"`
+}
+
+// ContainerStats returns a single stats snapshot without waiting for a
+// second sample (one-shot); rates are computed by the caller.
+func (c *Client) ContainerStats(ctx context.Context, id string) (Stats, error) {
+	var st Stats
+	q := url.Values{"stream": {"false"}, "one-shot": {"true"}}
+	err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/stats", q, nil, &st)
+	return st, err
 }

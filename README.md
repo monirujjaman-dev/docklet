@@ -3,7 +3,7 @@
 A lightweight, self-hosted PaaS for a single VPS, built directly on **Docker** and **Caddy**.
 One Go binary, SQLite, zero-config TLS, and a lean control plane so your server's RAM goes to your apps.
 
-> Status: **M3 — deploy apps from Docker images**. Git builds, databases and metrics come next.
+> Status: **M4 — monitoring**. Git builds, databases, workers and cron come next.
 
 ## Goals
 
@@ -70,6 +70,18 @@ Every 30 s Docklet compares Docker with its database:
 
 Interrupted deploy jobs resume when Docklet restarts.
 
+### Monitoring
+
+**Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.
+
+Where the numbers come from:
+- **Host:** `/proc` and `statfs`
+- **Containers:**
+  - cgroup v2 files are read directly when Docklet can see them, which costs nothing per sample;
+  - otherwise Docklet falls back to Docker's one-shot stats API, sampled every 6 s (cgroup v1 hosts, or Docker Desktop without the host mounts).
+
+With 20 containers on the stats fallback, collection added 0.13% of one core and 2 MB RSS to Docklet. In containers, mount the host's `/proc` and `/sys/fs/cgroup` read-only and set `DOCKLET_HOST_PROC` and `DOCKLET_HOST_CGROUP`; `compose.yaml` already does this.
+
 ### Caddy and the panel domain
 
 Docklet manages [Caddy](https://caddyserver.com) through its Admin API (`-caddy-admin`, default `http://localhost:2019`; `off` disables it). Caddy runs as its own process (`caddy run`), and Docklet owns its entire config: the database is the source of truth, and the full config is re-applied within ~10 s whenever Caddy restarts or drifts. If Docklet stops, Caddy keeps serving.
@@ -89,6 +101,7 @@ cmd/docklet/        CLI entrypoint (serve, audit verify, admin reset-password, v
 internal/server/    HTTP API, sessions, CSRF, rate limiting, panel domain, embedded SPA (dist/)
 internal/caddy/     Caddy config builder, Admin API client, reconciler
 internal/apps/      deploy pipeline, job workers, lifecycle, Docker reconciler
+internal/metrics/   host (/proc) and container (cgroup v2 or Docker stats) sampling, ring buffers, minute rollups
 internal/docker/    minimal Docker Engine API client (stdlib only); dockertest/ is an in-memory fake
 internal/auth/      argon2id, TOTP (RFC 6238), tokens
 internal/audit/     append-only hash-chained audit log + verifier

@@ -48,9 +48,14 @@ services:
       DOCKLET_TRUSTED_PROXIES: 172.30.0.2
       DOCKLET_ATTACH_CONTAINERS: docklet,docklet-caddy
       DOCKLET_LOG_LEVEL: ${DOCKLET_LOG_LEVEL:-info}
+      # Host metrics: read the host's /proc and cgroup tree (read-only).
+      DOCKLET_HOST_PROC: /host/proc
+      DOCKLET_HOST_CGROUP: /host/sys/fs/cgroup
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - docklet-data:/var/lib/docklet
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://172.30.0.3:3000/api/health"]
       interval: 30s
