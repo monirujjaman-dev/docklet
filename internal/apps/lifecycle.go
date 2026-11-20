@@ -154,6 +154,21 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	routesChanged := false
+	if len(s.AttachContainers) > 0 {
+		// Re-attach after Caddy or Docklet containers were recreated.
+		seen := map[int64]bool{}
+		for _, app := range apps {
+			if seen[app.ProjectID] {
+				continue
+			}
+			seen[app.ProjectID] = true
+			if err := s.attach(ctx, NetworkName(app.ProjectID)); err != nil && !errors.Is(err, docker.ErrNotFound) {
+				s.log.Warn("network attach failed", "err", err)
+			} else if err == nil {
+				routesChanged = true // cheap: Caddy only reloads on real drift
+			}
+		}
+	}
 	for _, app := range apps {
 		changed, err := s.observe(ctx, app)
 		if err != nil {

@@ -49,6 +49,7 @@ type Docker interface {
 	ImagePull(ctx context.Context, ref string, progress func(string)) error
 	ImageInspect(ctx context.Context, ref string) (docker.Image, error)
 	NetworkEnsure(ctx context.Context, name string, labels map[string]string) error
+	NetworkAttach(ctx context.Context, network, container string) error
 	NetworkRemove(ctx context.Context, name string) error
 	ContainerCreate(ctx context.Context, s docker.ContainerSpec) (string, error)
 	ContainerStart(ctx context.Context, id string) error
@@ -83,6 +84,11 @@ type Service struct {
 	ReconcileInterval time.Duration
 	HealthCheck       func(ctx context.Context, ip string, port int) error
 
+	// AttachContainers are joined to every project network. Set it when
+	// Docklet and Caddy run in containers (e.g. Docker Desktop) so they can
+	// reach app containers by IP.
+	AttachContainers []string
+
 	wake  chan struct{}
 	locks sync.Map // app id -> *sync.Mutex
 }
@@ -108,6 +114,27 @@ func tcpCheck(ctx context.Context, ip string, port int) error {
 		return err
 	}
 	return c.Close()
+}
+
+// ensureNetwork creates the project network and attaches AttachContainers.
+func (s *Service) ensureNetwork(ctx context.Context, projectID int64) (string, error) {
+	network := NetworkName(projectID)
+	if err := s.dk.NetworkEnsure(ctx, network, map[string]string{LabelManaged: "true", LabelProject: fmt.Sprint(projectID)}); err != nil {
+		return "", err
+	}
+	if err := s.attach(ctx, network); err != nil {
+		return "", err
+	}
+	return network, nil
+}
+
+func (s *Service) attach(ctx context.Context, network string) error {
+	for _, c := range s.AttachContainers {
+		if err := s.dk.NetworkAttach(ctx, network, c); err != nil {
+			return fmt.Errorf("attach %s to %s: %w", c, network, err)
+		}
+	}
+	return nil
 }
 
 // NetworkName is the per-project Docker network.

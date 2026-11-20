@@ -132,3 +132,13 @@ func TestClearPanelDomain(t *testing.T) {
 		t.Fatalf("last audit action = %q", action)
 	}
 }
+
+func TestParsePrefixes(t *testing.T) {
+	got, err := parsePrefixes(" 172.30.0.2, 10.0.0.0/8 ,")
+	if err != nil || len(got) != 2 || got[0].String() != "172.30.0.2/32" || got[1].String() != "10.0.0.0/8" {
+		t.Fatalf("got %v %v", got, err)
+	}
+	if _, err := parsePrefixes("nope"); err == nil {
+		t.Fatal("expected error")
+	}
+}

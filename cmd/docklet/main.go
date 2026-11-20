@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/server"
@@ -87,6 +90,12 @@ func cmdServe(args []string, stderr io.Writer) int {
 		"Caddy Admin API URL, or 'off' to disable Caddy integration (env DOCKLET_CADDY_ADMIN)")
 	dockerSocket := fs.String("docker-socket", envOr("DOCKLET_DOCKER_SOCKET", "/var/run/docker.sock"),
 		"Docker Engine socket, or 'off' to disable app deployments (env DOCKLET_DOCKER_SOCKET)")
+	panelUpstream := fs.String("panel-upstream", envOr("DOCKLET_PANEL_UPSTREAM", ""),
+		"address Caddy uses to reach the dashboard, e.g. 172.30.0.3:3000 when running in a container (env DOCKLET_PANEL_UPSTREAM)")
+	trusted := fs.String("trusted-proxies", envOr("DOCKLET_TRUSTED_PROXIES", ""),
+		"comma-separated IPs/CIDRs of reverse proxies besides loopback (env DOCKLET_TRUSTED_PROXIES)")
+	attach := fs.String("attach-containers", envOr("DOCKLET_ATTACH_CONTAINERS", ""),
+		"comma-separated containers to join to every project network, e.g. docklet,docklet-caddy (env DOCKLET_ATTACH_CONTAINERS)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -120,13 +129,21 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	defer func() { _ = st.Close() }()
 
-	cfg := server.Config{Addr: *addr, CaddyAdmin: *caddyAdmin}
+	proxies, err := parsePrefixes(*trusted)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid -trusted-proxies: %v\n", err)
+		return 2
+	}
+	cfg := server.Config{Addr: *addr, CaddyAdmin: *caddyAdmin, PanelUpstream: *panelUpstream, TrustedProxies: proxies}
 	if *caddyAdmin == "off" {
 		cfg.CaddyAdmin = ""
 	}
 	var opts []server.Option
 	if *dockerSocket != "off" {
 		opts = append(opts, server.WithDocker(docker.New(*dockerSocket)))
+		if names := splitList(*attach); len(names) > 0 {
+			opts = append(opts, server.WithAppsTuning(func(s *apps.Service) { s.AttachContainers = names }))
+		}
 	}
 	srv, err := server.New(cfg, log, st, box, opts...)
 	if err != nil {
@@ -138,6 +155,37 @@ func cmdServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func splitList(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// parsePrefixes accepts "10.0.0.0/8, 172.30.0.2" (bare IPs become /32 or /128).
+func parsePrefixes(v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, p := range splitList(v) {
+		if !strings.Contains(p, "/") {
+			ip, err := netip.ParseAddr(p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
+			continue
+		}
+		pf, err := netip.ParsePrefix(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, pf.Masked())
+	}
+	return out, nil
 }
 
 func envOr(key, def string) string {

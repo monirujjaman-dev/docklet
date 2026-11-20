@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
+	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
 
 type fakeCaddy struct {
@@ -275,4 +277,58 @@ func actionsOf(t *testing.T, st *store.Store) []string {
 		out = append(out, a)
 	}
 	return out
+}
+
+func TestResolveClientTrustedProxies(t *testing.T) {
+	caddyNet := []netip.Prefix{netip.MustParsePrefix("172.30.0.2/32")}
+	mk := func(remote, xff, proto string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		if proto != "" {
+			r.Header.Set("X-Forwarded-Proto", proto)
+		}
+		return r
+	}
+	cases := []struct {
+		remote, xff, proto string
+		trusted            []netip.Prefix
+		ip                 string
+		https              bool
+	}{
+		{"172.30.0.2:5000", "1.2.3.4", "https", caddyNet, "1.2.3.4", true},
+		{"172.30.0.9:5000", "1.2.3.4", "https", caddyNet, "172.30.0.9", false}, // not the proxy: headers ignored
+		{"127.0.0.1:5000", "9.9.9.9, 5.6.7.8", "https", nil, "5.6.7.8", true},
+		{"10.0.0.5:5000", "1.2.3.4", "https", nil, "10.0.0.5", false},
+	}
+	for _, c := range cases {
+		ci := resolveClient(mk(c.remote, c.xff, c.proto), c.trusted)
+		if ci.ip != c.ip || ci.https != c.https {
+			t.Errorf("%s with %v: got %+v, want ip=%s https=%v", c.remote, c.trusted, ci, c.ip, c.https)
+		}
+	}
+}
+
+func TestPanelUpstreamOverride(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	box, _ := secrets.New(bytes.Repeat([]byte{4}, secrets.KeySize))
+	s, err := New(Config{Addr: "0.0.0.0:0", PanelUpstream: "172.30.0.3:3000"}, slog.New(slog.NewTextHandler(io.Discard, nil)), st, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_ = st.Q.PutSetting(ctx, db.PutSettingParams{Key: SettingPanelDomain, Value: "panel.example.com", UpdatedAt: 1})
+	routes, _, err := s.DesiredRoutes(ctx)
+	if err != nil || len(routes) != 1 || routes[0].Upstream != "172.30.0.3:3000" {
+		t.Fatalf("routes = %+v, %v", routes, err)
+	}
+	if err := s.restrictToLoopback(); err != nil {
+		t.Fatal(err)
+	}
 }

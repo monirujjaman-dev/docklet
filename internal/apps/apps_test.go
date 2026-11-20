@@ -308,3 +308,17 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestAttachContainersJoinProjectNetwork(t *testing.T) {
+	e := setup(t, "hello:v1")
+	e.svc.AttachContainers = []string{"docklet", "docklet-caddy"}
+	if _, err := e.deploy(t, "hello:v1"); err != nil {
+		t.Fatal(err)
+	}
+	net := NetworkName(e.app.ProjectID)
+	for _, c := range e.svc.AttachContainers {
+		if !e.dk.Attached(net, c) {
+			t.Errorf("%s not attached to %s", c, net)
+		}
+	}
+}

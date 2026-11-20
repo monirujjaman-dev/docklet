@@ -138,8 +138,8 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 	}
 
 	// 2. Network and environment.
-	network := NetworkName(project.ID)
-	if err := s.dk.NetworkEnsure(ctx, network, map[string]string{LabelManaged: "true", LabelProject: fmt.Sprint(project.ID)}); err != nil {
+	network, err := s.ensureNetwork(ctx, project.ID)
+	if err != nil {
 		return "", fmt.Errorf("network: %w", err)
 	}
 	env, err := s.envFor(ctx, app.ID)

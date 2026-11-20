@@ -123,9 +123,57 @@ func (c *Client) NetworkEnsure(ctx context.Context, name string, labels map[stri
 	return err
 }
 
-// NetworkRemove deletes a network (not found is not an error).
+type networkInfo struct {
+	ID         string `json:"Id"`
+	Containers map[string]struct {
+		Name string `json:"Name"`
+	} `json:"Containers"`
+}
+
+func (c *Client) networkInspect(ctx context.Context, name string) (networkInfo, error) {
+	var n networkInfo
+	err := c.do(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil, nil, &n)
+	return n, err
+}
+
+// NetworkAttach connects a container (name or id) to a network unless it is
+// already connected. Used when Docklet and Caddy themselves run in containers
+// and must reach app containers on project networks.
+func (c *Client) NetworkAttach(ctx context.Context, network, container string) error {
+	n, err := c.networkInspect(ctx, network)
+	if err != nil {
+		return err
+	}
+	for id, ep := range n.Containers {
+		if ep.Name == container || strings.HasPrefix(id, container) {
+			return nil
+		}
+	}
+	err = c.do(ctx, http.MethodPost, "/networks/"+url.PathEscape(network)+"/connect", nil,
+		map[string]any{"Container": container}, nil)
+	if err != nil && strings.Contains(err.Error(), "already exists") {
+		return nil
+	}
+	return err
+}
+
+// NetworkRemove disconnects any remaining containers and deletes the network
+// (not found is not an error).
 func (c *Client) NetworkRemove(ctx context.Context, name string) error {
-	err := c.do(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil, nil, nil)
+	n, err := c.networkInspect(ctx, name)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for id := range n.Containers {
+		if err := c.do(ctx, http.MethodPost, "/networks/"+url.PathEscape(name)+"/disconnect", nil,
+			map[string]any{"Container": id, "Force": true}, nil); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+	err = c.do(ctx, http.MethodDelete, "/networks/"+url.PathEscape(name), nil, nil, nil)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}

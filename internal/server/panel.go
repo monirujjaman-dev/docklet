@@ -95,8 +95,8 @@ func (s *Server) DesiredRoutes(ctx context.Context) ([]caddy.Route, caddy.Option
 	opts := s.caddyOpts
 	opts.ACMEEmail = email
 	var routes []caddy.Route
-	if port := s.lm.port(); domain != "" && port != 0 {
-		routes = append(routes, caddy.Route{ID: "panel", Domain: domain, Upstream: loopbackAddr(port)})
+	if up := s.panelUpstream(); domain != "" && up != "" {
+		routes = append(routes, caddy.Route{ID: "panel", Domain: domain, Upstream: up})
 	}
 	appRoutes, err := s.st.Q.ListRoutableDomains(ctx)
 	if err != nil {
@@ -416,8 +416,23 @@ func (s *Server) finishPanelVerify(domain, nonce string, verr error) {
 	}
 }
 
+func (s *Server) panelUpstream() string {
+	if s.cfg.PanelUpstream != "" {
+		return s.cfg.PanelUpstream
+	}
+	if port := s.lm.port(); port != 0 {
+		return loopbackAddr(port)
+	}
+	return ""
+}
+
 // restrictToLoopback rebinds to 127.0.0.1 on the same port, if not already.
+// With an explicit PanelUpstream (container deployments) Caddy reaches us over
+// a Docker network, so the listener is left alone.
 func (s *Server) restrictToLoopback() error {
+	if s.cfg.PanelUpstream != "" {
+		return nil
+	}
 	cur := s.lm.addr()
 	if cur == "" || isLoopbackAddr(cur) {
 		return nil

@@ -18,6 +18,16 @@ One Go binary, SQLite, zero-config TLS, and a lean control plane so your server'
 
 Go (stdlib `net/http`) · Docker Engine API · Caddy Admin API · SQLite · Svelte 5 + Vite + Tailwind (embedded into the binary)
 
+## Install
+
+On a Linux server (installs Docker if needed, then Docklet + Caddy as containers):
+
+```sh
+curl -sSL https://raw.githubusercontent.com/monirujjaman-dev/docklet/main/install.sh | sudo sh
+```
+
+See [docs/install.md](docs/install.md). To try it on Windows or macOS with Docker Desktop, see [docs/docker-desktop.md](docs/docker-desktop.md) (`docker compose up -d --build`).
+
 ## Development
 
 Requirements: Go 1.24+, Node 22+, make.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -25,6 +26,14 @@ type Config struct {
 	Addr string
 	// CaddyAdmin is the Caddy Admin API URL; empty disables Caddy integration.
 	CaddyAdmin string
+	// PanelUpstream is the address Caddy uses to reach this dashboard
+	// (default 127.0.0.1:<port>). Set it when Docklet runs in a container,
+	// e.g. "172.30.0.3:3000". When set, Docklet never rebinds its listener:
+	// direct access is controlled by which ports the container publishes.
+	PanelUpstream string
+	// TrustedProxies are peers (besides loopback) whose X-Forwarded-For and
+	// X-Forwarded-Proto headers are honoured, e.g. the Caddy container.
+	TrustedProxies []netip.Prefix
 }
 
 // Server is the Docklet control-plane HTTP server.
@@ -177,7 +186,7 @@ func (s *Server) routes() http.Handler {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
 	mux.Handle("/", spaHandler())
-	return securityHeaders(sameOrigin(mux))
+	return s.withClientInfo(securityHeaders(sameOrigin(mux)))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
@@ -191,7 +200,7 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	addr := s.cfg.Addr
-	if panel.Status == panelActive {
+	if panel.Status == panelActive && s.cfg.PanelUpstream == "" {
 		port, err := portOf(addr)
 		if err != nil {
 			return err

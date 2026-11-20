@@ -1,0 +1,73 @@
+# Run Docklet and Caddy as containers: on Docker Desktop (docs/docker-desktop.md)
+# or on a Linux server via install.sh (docs/install.md).
+#
+#   docker compose up -d --build     # build from this checkout
+#   docker compose pull && docker compose up -d --no-build   # prebuilt image
+#
+# Addresses are pinned so that:
+#   - Caddy's admin API listens only on the internal "docklet" network
+#     (172.30.0.2:2019). App containers live on per-project networks and
+#     cannot reach it.
+#   - Docklet trusts X-Forwarded-* headers only from the Caddy container.
+name: docklet
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: docklet-caddy
+    restart: unless-stopped
+    command: ["caddy", "run", "--resume", "--config", "/etc/caddy/caddy.json"]
+    ports:
+      - "${DOCKLET_HTTP_PORT:-80}:80"
+      - "${DOCKLET_HTTPS_PORT:-443}:443"
+      - "${DOCKLET_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./deploy/caddy/caddy.json:/etc/caddy/caddy.json:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      docklet:
+        ipv4_address: 172.30.0.2
+
+  docklet:
+    build: .
+    image: ghcr.io/monirujjaman-dev/docklet:${DOCKLET_VERSION:-main}
+    container_name: docklet
+    restart: unless-stopped
+    depends_on:
+      - caddy
+    ports:
+      # Set DOCKLET_BIND_IP=127.0.0.1 once the panel domain works, so the
+      # dashboard is only reachable through Caddy.
+      - "${DOCKLET_BIND_IP:-0.0.0.0}:${DOCKLET_PORT:-3000}:3000"
+    environment:
+      DOCKLET_ADDR: "172.30.0.3:3000"
+      DOCKLET_DATA_DIR: /var/lib/docklet
+      DOCKLET_CADDY_ADMIN: http://172.30.0.2:2019
+      DOCKLET_PANEL_UPSTREAM: "172.30.0.3:3000"
+      DOCKLET_TRUSTED_PROXIES: 172.30.0.2
+      DOCKLET_ATTACH_CONTAINERS: docklet,docklet-caddy
+      DOCKLET_LOG_LEVEL: ${DOCKLET_LOG_LEVEL:-info}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - docklet-data:/var/lib/docklet
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://172.30.0.3:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      docklet:
+        ipv4_address: 172.30.0.3
+
+networks:
+  docklet:
+    name: docklet
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  docklet-data:
+  caddy-data:
+  caddy-config:
