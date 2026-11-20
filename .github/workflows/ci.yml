@@ -93,6 +93,6 @@ jobs:
       - name: Smoke test the image
         run: |
           docker run --rm docklet:ci version
-          docker run -d --name d -p 3000:3000 -e DOCKLET_CADDY_ADMIN=off -e DOCKLET_DOCKER_SOCKET=off docklet:ci
+          docker run -d --name docklet-smoke -p 3000:3000 -e DOCKLET_CADDY_ADMIN=off -e DOCKLET_DOCKER_SOCKET=off docklet:ci
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3000/api/health && exit 0; sleep 1; done
-          docker logs d; exit 1
+          docker logs docklet-smoke; exit 1
