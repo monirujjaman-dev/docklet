@@ -13,6 +13,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/caddy"
+	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
@@ -54,6 +55,7 @@ type Server struct {
 	docker   apps.Docker
 	appsTune func(*apps.Service)
 	apps     *apps.Service
+	metrics  *metrics.Collector
 
 	runCtx         context.Context
 	prober         func(ctx context.Context, url string) (string, error)
@@ -88,6 +90,9 @@ func WithDocker(d apps.Docker) Option { return func(s *Server) { s.docker = d } 
 
 // WithAppsTuning adjusts the apps service (timeouts etc.), mainly for tests.
 func WithAppsTuning(fn func(*apps.Service)) Option { return func(s *Server) { s.appsTune = fn } }
+
+// WithMetrics enables the monitoring endpoints and runs the collector.
+func WithMetrics(c *metrics.Collector) Option { return func(s *Server) { s.metrics = c } }
 
 // WithCaddyInterval sets the reconcile interval.
 func WithCaddyInterval(d time.Duration) Option {
@@ -182,6 +187,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/apps/{id}/logs", authed(s.handleAppLogs))
 	mux.HandleFunc("GET /api/deployments/{id}", authed(s.handleGetDeployment))
 
+	mux.HandleFunc("GET /api/metrics/status", authed(s.handleMetricsStatus))
+	mux.HandleFunc("GET /api/metrics/recent", authed(s.handleMetricsRecent))
+	mux.HandleFunc("GET /api/metrics/history", authed(s.handleMetricsHistory))
+	mux.HandleFunc("GET /api/metrics/stream", authed(s.handleMetricsStream))
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
@@ -223,6 +233,19 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.apps != nil {
 		go s.apps.Run(ctx)
 	}
+	metricsDone := make(chan struct{})
+	if s.metrics != nil {
+		go func() { s.metrics.Run(ctx); close(metricsDone) }()
+	} else {
+		close(metricsDone)
+	}
+	// Let the collector write its partial minute before the DB closes.
+	defer func() {
+		select {
+		case <-metricsDone:
+		case <-time.After(5 * time.Second):
+		}
+	}()
 
 	select {
 	case err := <-s.lm.errCh:

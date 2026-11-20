@@ -4,11 +4,12 @@
   import { router } from "../lib/router.svelte";
   import { parseEnv } from "../lib/env";
   import StatusBadge from "../lib/StatusBadge.svelte";
+  import MetricsPanel from "../lib/MetricsPanel.svelte";
 
   let { appId }: { appId: string } = $props();
 
   let app = $state<AppDetail | null>(null);
-  let tab = $state<"overview" | "env" | "deployments" | "logs">("overview");
+  let tab = $state<"overview" | "metrics" | "env" | "deployments" | "logs">("overview");
   let error = $state("");
   let busy = $state("");
 
@@ -193,6 +194,7 @@
   const fmt = (ts?: number) => (ts ? new Date(ts * 1000).toLocaleString() : "");
   const tabs = [
     ["overview", "Overview"],
+    ["metrics", "Metrics"],
     ["env", "Environment"],
     ["deployments", "Deployments"],
     ["logs", "Logs"],
@@ -280,6 +282,11 @@
       </section>
     </div>
     {#if saveMsg}<p class="text-sm text-emerald-300 mt-4">{saveMsg}</p>{/if}
+  {:else if tab === "metrics"}
+    {#if app.runtimeStatus !== "running"}
+      <p class="text-sm text-neutral-500 mb-4">The app is not running; live data is paused and stored history is shown.</p>
+    {/if}
+    <MetricsPanel scope="app:{app.id}" />
   {:else if tab === "env"}
     <section class="max-w-3xl space-y-4">
       <p class="text-sm text-neutral-400">Values are encrypted at rest and cannot be displayed. Setting an existing key replaces its value.</p>

@@ -80,6 +80,20 @@ type Job struct {
 	FinishedAt int64
 }
 
+type Metric struct {
+	Scope     string
+	Ts        int64
+	Cpu       float64
+	MemUsed   int64
+	MemLimit  int64
+	DiskUsed  int64
+	DiskTotal int64
+	NetRx     float64
+	NetTx     float64
+	BlkRead   float64
+	BlkWrite  float64
+}
+
 type Project struct {
 	ID        int64
 	Name      string

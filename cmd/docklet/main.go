@@ -12,11 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
+	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/server"
 	"github.com/monirujjaman-dev/docklet/internal/store"
@@ -96,6 +99,12 @@ func cmdServe(args []string, stderr io.Writer) int {
 		"comma-separated IPs/CIDRs of reverse proxies besides loopback (env DOCKLET_TRUSTED_PROXIES)")
 	attach := fs.String("attach-containers", envOr("DOCKLET_ATTACH_CONTAINERS", ""),
 		"comma-separated containers to join to every project network, e.g. docklet,docklet-caddy (env DOCKLET_ATTACH_CONTAINERS)")
+	hostProc := fs.String("host-proc", envOr("DOCKLET_HOST_PROC", "/proc"),
+		"host /proc for metrics; /host/proc when the host's /proc is mounted into the container (env DOCKLET_HOST_PROC)")
+	hostCgroup := fs.String("host-cgroup", envOr("DOCKLET_HOST_CGROUP", "/sys/fs/cgroup"),
+		"host cgroup v2 root for container metrics (env DOCKLET_HOST_CGROUP)")
+	retentionDays := fs.Int("metrics-retention-days", envInt("DOCKLET_METRICS_RETENTION_DAYS", 7),
+		"days of one-minute metrics to keep; 0 disables metrics (env DOCKLET_METRICS_RETENTION_DAYS)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -139,11 +148,19 @@ func cmdServe(args []string, stderr io.Writer) int {
 		cfg.CaddyAdmin = ""
 	}
 	var opts []server.Option
+	var statsAPI metrics.StatsAPI
 	if *dockerSocket != "off" {
-		opts = append(opts, server.WithDocker(docker.New(*dockerSocket)))
+		dc := docker.New(*dockerSocket)
+		statsAPI = dc
+		opts = append(opts, server.WithDocker(dc))
 		if names := splitList(*attach); len(names) > 0 {
 			opts = append(opts, server.WithAppsTuning(func(s *apps.Service) { s.AttachContainers = names }))
 		}
+	}
+	if *retentionDays > 0 {
+		mc := metrics.New(st, statsAPI, metrics.Config{Proc: *hostProc, CgroupRoot: *hostCgroup, DiskPath: *dataDir}, log)
+		mc.Retention = time.Duration(*retentionDays) * 24 * time.Hour
+		opts = append(opts, server.WithMetrics(mc))
 	}
 	srv, err := server.New(cfg, log, st, box, opts...)
 	if err != nil {
@@ -186,6 +203,15 @@ func parsePrefixes(v string) ([]netip.Prefix, error) {
 		out = append(out, pf.Masked())
 	}
 	return out, nil
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 func envOr(key, def string) string {
