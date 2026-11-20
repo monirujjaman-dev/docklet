@@ -8,6 +8,23 @@ import (
 	"database/sql"
 )
 
+type App struct {
+	ID                  int64
+	ProjectID           int64
+	Name                string
+	Image               string
+	Port                int64
+	RestartPolicy       string
+	CpuMillis           int64
+	MemoryMb            int64
+	DesiredStatus       string
+	RuntimeStatus       string
+	RuntimeMessage      string
+	CurrentDeploymentID sql.NullInt64
+	CreatedAt           int64
+	UpdatedAt           int64
+}
+
 type AuditLog struct {
 	ID       int64
 	Ts       int64
@@ -19,6 +36,54 @@ type AuditLog struct {
 	Details  string
 	PrevHash string
 	Hash     string
+}
+
+type Deployment struct {
+	ID          int64
+	AppID       int64
+	Image       string
+	ImageID     string
+	Port        int64
+	Status      string
+	ContainerID string
+	ContainerIp string
+	Error       string
+	Log         string
+	CreatedBy   string
+	CreatedAt   int64
+	StartedAt   int64
+	FinishedAt  int64
+}
+
+type Domain struct {
+	Domain    string
+	AppID     int64
+	CreatedAt int64
+}
+
+type EnvVar struct {
+	AppID     int64
+	Key       string
+	ValueEnc  []byte
+	UpdatedAt int64
+}
+
+type Job struct {
+	ID         int64
+	Kind       string
+	RefID      int64
+	Status     string
+	Attempts   int64
+	Error      string
+	CreatedAt  int64
+	StartedAt  int64
+	FinishedAt int64
+}
+
+type Project struct {
+	ID        int64
+	Name      string
+	CreatedAt int64
 }
 
 type Session struct {

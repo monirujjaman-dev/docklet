@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +97,20 @@ func (s *Server) DesiredRoutes(ctx context.Context) ([]caddy.Route, caddy.Option
 	var routes []caddy.Route
 	if port := s.lm.port(); domain != "" && port != 0 {
 		routes = append(routes, caddy.Route{ID: "panel", Domain: domain, Upstream: loopbackAddr(port)})
+	}
+	appRoutes, err := s.st.Q.ListRoutableDomains(ctx)
+	if err != nil {
+		return nil, opts, err
+	}
+	for _, r := range appRoutes {
+		if r.Domain == domain {
+			continue // the panel wins if a domain was reused
+		}
+		routes = append(routes, caddy.Route{
+			ID:       fmt.Sprintf("app%d-%s", r.AppID, r.Domain),
+			Domain:   r.Domain,
+			Upstream: net.JoinHostPort(r.ContainerIp, strconv.FormatInt(r.Port, 10)),
+		})
 	}
 	return routes, opts, nil
 }

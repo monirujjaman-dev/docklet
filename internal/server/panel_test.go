@@ -62,7 +62,7 @@ type panelEnv struct {
 // startPanelServer runs a real Server on 0.0.0.0:0 with a fake Caddy and a
 // prober that, instead of going through Caddy+TLS, calls the probe endpoint
 // directly on loopback (what Caddy would proxy to).
-func startPanelServer(t *testing.T, dbPath string, probeOK bool) *panelEnv {
+func startPanelServer(t *testing.T, dbPath string, probeOK bool, extra ...Option) *panelEnv {
 	t.Helper()
 	st, err := store.Open(context.Background(), dbPath)
 	if err != nil {
@@ -94,8 +94,7 @@ func startPanelServer(t *testing.T, dbPath string, probeOK bool) *panelEnv {
 	}
 	srv, err = New(Config{Addr: "0.0.0.0:0", CaddyAdmin: cts.URL},
 		slog.New(slog.NewTextHandler(io.Discard, nil)), st, box,
-		WithProber(prober), WithPanelVerify(time.Second, 20*time.Millisecond),
-		WithCaddyInterval(50*time.Millisecond))
+		append([]Option{WithProber(prober), WithPanelVerify(time.Second, 20*time.Millisecond)}, append([]Option{WithCaddyInterval(50 * time.Millisecond)}, extra...)...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

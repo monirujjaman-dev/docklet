@@ -1,0 +1,85 @@
+<script lang="ts">
+  import { api } from "../lib/api";
+  import { router } from "../lib/router.svelte";
+  import { parseEnv } from "../lib/env";
+  import Field from "../lib/Field.svelte";
+
+  let { projectId }: { projectId: string } = $props();
+
+  let name = $state("");
+  let image = $state("");
+  let port = $state("");
+  let domains = $state("");
+  let envText = $state("");
+  let memoryMb = $state("");
+  let cpus = $state("");
+  let restartPolicy = $state("unless-stopped");
+  let error = $state("");
+  let busy = $state(false);
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault();
+    error = "";
+    const { env, errors } = parseEnv(envText);
+    if (errors.length) {
+      error = errors.join("; ");
+      return;
+    }
+    busy = true;
+    try {
+      const res = await api<{ id: number }>(`/projects/${projectId}/apps`, {
+        json: {
+          name: name.trim(),
+          image: image.trim(),
+          port: port ? Number(port) : 0,
+          domains: domains.split(/[\s,]+/).filter(Boolean),
+          env,
+          memoryMb: memoryMb ? Number(memoryMb) : 0,
+          cpuMillis: cpus ? Math.round(Number(cpus) * 1000) : 0,
+          restartPolicy,
+        },
+      });
+      router.go(`/apps/${res.id}`);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      busy = false;
+    }
+  }
+</script>
+
+<h1 class="text-xl font-semibold mb-6">New app</h1>
+
+<form onsubmit={submit} class="max-w-2xl space-y-4">
+  <div class="grid gap-4 md:grid-cols-2">
+    <Field label="Name" bind:value={name} hint="Lowercase letters, digits and '-'; also the hostname on the project network" />
+    <Field label="Image" bind:value={image} hint="e.g. nginx:alpine or ghcr.io/org/app:1.2" />
+    <Field label="Container port" bind:value={port} inputmode="numeric" hint="Leave empty to use the port the image exposes" />
+    <Field label="Domains" bind:value={domains} hint="Comma or space separated; DNS must point here" />
+    <Field label="Memory limit (MB)" bind:value={memoryMb} inputmode="numeric" hint="Empty = no limit" />
+    <Field label="CPU limit (cores)" bind:value={cpus} hint="e.g. 0.5; empty = no limit" />
+  </div>
+  <label class="block">
+    <span class="block text-sm text-neutral-300 mb-1">Restart policy</span>
+    <select bind:value={restartPolicy} class="rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm">
+      <option value="unless-stopped">unless-stopped (recommended)</option>
+      <option value="always">always</option>
+      <option value="on-failure">on-failure</option>
+      <option value="no">no</option>
+    </select>
+  </label>
+  <label class="block">
+    <span class="block text-sm text-neutral-300 mb-1">Environment variables</span>
+    <textarea
+      bind:value={envText}
+      rows="6"
+      placeholder={"DATABASE_URL=postgres://…\nLOG_LEVEL=info"}
+      class="w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 text-sm font-mono outline-none focus:border-emerald-500"
+    ></textarea>
+    <span class="block text-xs text-neutral-500 mt-1">One KEY=VALUE per line. Values are encrypted and can't be read back.</span>
+  </label>
+  {#if error}<p class="text-sm text-red-400">{error}</p>{/if}
+  <button disabled={busy} class="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-2 text-sm font-medium">
+    {busy ? "Creating…" : "Create and deploy"}
+  </button>
+</form>

@@ -29,6 +29,8 @@ type Reconciler struct {
 	interval time.Duration
 	trigger  chan struct{}
 
+	passMu sync.Mutex // serialises reconcile passes
+
 	mu     sync.Mutex
 	status Status
 	synced chan struct{} // closed and replaced after every pass (for waiters)
@@ -77,8 +79,14 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 }
 
+// Sync applies the desired config now and returns once Caddy has it. Use it
+// before tearing down an old upstream so traffic has already moved.
+func (r *Reconciler) Sync(ctx context.Context) error { return r.Once(ctx) }
+
 // Once performs a single reconcile pass and returns its error.
 func (r *Reconciler) Once(ctx context.Context) error {
+	r.passMu.Lock()
+	defer r.passMu.Unlock()
 	err := r.reconcile(ctx)
 	r.mu.Lock()
 	if err != nil {
