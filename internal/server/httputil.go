@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -69,38 +71,76 @@ func (s *Server) handler(fn func(http.ResponseWriter, *http.Request) error) http
 	}
 }
 
-// isTrustedProxy reports whether the direct peer is a local reverse proxy
-// (Caddy on the same host), whose forwarding headers we accept.
-func isTrustedProxy(r *http.Request) bool {
+type clientKeyT struct{}
+
+var clientKey clientKeyT
+
+type clientInfo struct {
+	ip    string
+	https bool
+}
+
+// isTrustedPeer reports whether the direct peer is loopback or one of the
+// configured proxies, whose forwarding headers we accept.
+func isTrustedPeer(r *http.Request, trusted []netip.Prefix) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, p := range trusted {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
-// clientIP returns the end-user IP, honouring X-Forwarded-For only from a
-// trusted local proxy (Caddy appends the real client as the last entry).
-func clientIP(r *http.Request) string {
+func resolveClient(r *http.Request, trusted []netip.Prefix) clientInfo {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if isTrustedProxy(r) {
+	ci := clientInfo{ip: host, https: r.TLS != nil}
+	if isTrustedPeer(r, trusted) {
+		// Caddy appends the real client as the last X-Forwarded-For entry.
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
 			if ip := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); ip != nil {
-				return ip.String()
+				ci.ip = ip.String()
 			}
 		}
+		if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			ci.https = true
+		}
 	}
-	return host
+	return ci
 }
 
-func isHTTPS(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return isTrustedProxy(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+// withClientInfo resolves the client IP and scheme once per request.
+func (s *Server) withClientInfo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ci := resolveClient(r, s.cfg.TrustedProxies)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientKey, ci)))
+	})
 }
+
+func clientFrom(r *http.Request) clientInfo {
+	if ci, ok := r.Context().Value(clientKey).(clientInfo); ok {
+		return ci
+	}
+	return resolveClient(r, nil)
+}
+
+// clientIP returns the end-user IP.
+func clientIP(r *http.Request) string { return clientFrom(r).ip }
+
+// isHTTPS reports whether the end user connected over HTTPS.
+func isHTTPS(r *http.Request) bool { return clientFrom(r).https }

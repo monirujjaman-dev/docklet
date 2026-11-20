@@ -28,6 +28,7 @@ type Fake struct {
 	images     map[string]docker.Image
 	containers map[string]*Container
 	networks   map[string]bool
+	attached   map[string]bool
 	seq        int
 }
 
@@ -66,6 +67,28 @@ func (f *Fake) NetworkEnsure(_ context.Context, name string, _ map[string]string
 	f.networks[name] = true
 	return nil
 }
+
+// NetworkAttach records attachments as "network/container".
+func (f *Fake) NetworkAttach(_ context.Context, network, container string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.networks[network] {
+		return docker.ErrNotFound
+	}
+	if f.attached == nil {
+		f.attached = map[string]bool{}
+	}
+	f.attached[network+"/"+container] = true
+	return nil
+}
+
+// Attached reports whether container was attached to network.
+func (f *Fake) Attached(network, container string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attached[network+"/"+container]
+}
+
 func (f *Fake) NetworkRemove(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

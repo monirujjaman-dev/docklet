@@ -115,6 +115,13 @@ func TestRealDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.NetworkRemove(ctx, net) }()
+	if attach := os.Getenv("DOCKLET_TEST_ATTACH"); attach != "" {
+		for i := 0; i < 2; i++ { // second call must be a no-op
+			if err := c.NetworkAttach(ctx, net, attach); err != nil {
+				t.Fatalf("attach #%d: %v", i+1, err)
+			}
+		}
+	}
 	id, err := c.ContainerCreate(ctx, ContainerSpec{
 		Name: "docklet-test-hello", Image: "docklet-test/hello:v1", Env: []string{"APP_VERSION=t"},
 		Labels: map[string]string{"docklet.managed": "true", "docklet.test": "1"}, Port: 8080,

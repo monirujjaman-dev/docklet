@@ -74,3 +74,25 @@ jobs:
         with:
           name: docklet-linux-${{ matrix.arch }}
           path: bin/docklet
+
+  docker:
+    # Validates the Dockerfile on every PR (images are published by image.yml).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: docklet:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test the image
+        run: |
+          docker run --rm docklet:ci version
+          docker run -d --name d -p 3000:3000 -e DOCKLET_CADDY_ADMIN=off -e DOCKLET_DOCKER_SOCKET=off docklet:ci
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3000/api/health && exit 0; sleep 1; done
+          docker logs d; exit 1

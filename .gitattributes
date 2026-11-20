@@ -1,0 +1,5 @@
+# Keep LF endings so files work inside Linux containers when the repo is
+# cloned on Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary
