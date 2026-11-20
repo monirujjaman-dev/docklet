@@ -2,8 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/monirujjaman-dev/docklet/internal/auth"
+	"github.com/monirujjaman-dev/docklet/internal/store"
+	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -30,5 +35,69 @@ func TestRunUnknown(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "unknown command") {
 		t.Fatalf("stderr = %q", errb.String())
+	}
+}
+
+func seedUser(t *testing.T, dir string) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	h, _ := auth.HashPassword("original password")
+	if _, err := st.Q.CreateUser(ctx, db.CreateUserParams{Username: "admin", PasswordHash: h, CreatedAt: 1, UpdatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResetPasswordAndVerify(t *testing.T) {
+	dir := t.TempDir()
+	seedUser(t, dir)
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"admin", "reset-password", "-data-dir", dir, "-username", "admin"}, &out, &errb); code != 0 {
+		t.Fatalf("reset: exit %d, %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "New password: ") {
+		t.Fatalf("no generated password in output: %q", out.String())
+	}
+
+	out.Reset()
+	if code := run([]string{"audit", "verify", "-data-dir", dir}, &out, &errb); code != 0 {
+		t.Fatalf("verify: exit %d, %s %s", code, out.String(), errb.String())
+	}
+	if !strings.HasPrefix(out.String(), "OK: 1 audit entries") {
+		t.Fatalf("verify output %q", out.String())
+	}
+
+	// Tamper with the log directly; verify must fail.
+	st, err := store.Open(context.Background(), dbPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"DROP TRIGGER audit_log_no_update", "UPDATE audit_log SET actor = 'x' WHERE id = 1"} {
+		if _, err := st.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = st.Close()
+	out.Reset()
+	if code := run([]string{"audit", "verify", "-data-dir", dir}, &out, &errb); code != 1 || !strings.Contains(out.String(), "BROKEN") {
+		t.Fatalf("tampered verify: exit %d, %q", code, out.String())
+	}
+}
+
+func TestResetPasswordUnknownUserAndMissingDB(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	if code := run([]string{"admin", "reset-password", "-data-dir", dir, "-username", "admin"}, &out, &errb); code != 1 {
+		t.Fatalf("missing db: exit %d", code)
+	}
+	seedUser(t, dir)
+	errb.Reset()
+	if code := run([]string{"admin", "reset-password", "-data-dir", dir, "-username", "ghost"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "not found") {
+		t.Fatalf("unknown user: exit %d, %q", code, errb.String())
 	}
 }

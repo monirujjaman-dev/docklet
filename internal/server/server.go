@@ -3,13 +3,15 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/monirujjaman-dev/docklet/internal/secrets"
+	"github.com/monirujjaman-dev/docklet/internal/store"
+	"github.com/monirujjaman-dev/docklet/internal/store/db"
 	"github.com/monirujjaman-dev/docklet/internal/version"
 )
 
@@ -20,18 +22,34 @@ type Config struct {
 
 // Server is the Docklet control-plane HTTP server.
 type Server struct {
-	cfg  Config
-	log  *slog.Logger
-	http *http.Server
+	cfg          Config
+	log          *slog.Logger
+	st           *store.Store
+	box          *secrets.Box
+	now          func() time.Time
+	loginLimiter *rateLimiter
+	http         *http.Server
 }
 
+// Option customises a Server (used by tests).
+type Option func(*Server)
+
+// WithClock overrides the time source.
+func WithClock(now func() time.Time) Option { return func(s *Server) { s.now = now } }
+
 // New builds a Server with all routes registered.
-func New(cfg Config, log *slog.Logger) *Server {
-	s := &Server{cfg: cfg, log: log}
+func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts ...Option) *Server {
+	s := &Server{cfg: cfg, log: log, st: st, box: box, now: time.Now}
+	for _, o := range opts {
+		o(s)
+	}
+	// 10 attempts per minute per IP for login/setup, on top of per-account lockout.
+	s.loginLimiter = newRateLimiter(10, time.Minute, func() time.Time { return s.now() })
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	return s
@@ -42,13 +60,33 @@ func (s *Server) Handler() http.Handler { return s.http.Handler }
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
+	h := s.handler
+	authed := func(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
+		return s.requireAuth(h(fn))
+	}
+
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/version", s.handleVersion)
+
+	mux.HandleFunc("GET /api/setup/status", h(s.handleSetupStatus))
+	mux.HandleFunc("POST /api/setup", h(s.handleSetup))
+	mux.HandleFunc("POST /api/auth/login", h(s.handleLogin))
+	mux.HandleFunc("POST /api/auth/logout", authed(s.handleLogout))
+	mux.HandleFunc("GET /api/auth/me", authed(s.handleMe))
+
+	mux.HandleFunc("POST /api/account/password", authed(s.handleChangePassword))
+	mux.HandleFunc("POST /api/account/totp/setup", authed(s.handleTOTPSetup))
+	mux.HandleFunc("POST /api/account/totp/enable", authed(s.handleTOTPEnable))
+	mux.HandleFunc("POST /api/account/totp/disable", authed(s.handleTOTPDisable))
+
+	mux.HandleFunc("GET /api/audit", authed(s.handleAuditList))
+	mux.HandleFunc("GET /api/audit/verify", authed(s.handleAuditVerify))
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	})
 	mux.Handle("/", spaHandler())
-	return securityHeaders(mux)
+	return securityHeaders(sameOrigin(mux))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully.
@@ -58,6 +96,8 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	s.log.Info("listening", "addr", ln.Addr().String())
+
+	go s.janitor(ctx)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.http.Serve(ln) }()
@@ -76,18 +116,35 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
+// janitor periodically removes expired sessions and idle rate-limit buckets.
+func (s *Server) janitor(ctx context.Context) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := s.now()
+			n, err := s.st.Q.DeleteExpiredSessions(ctx, db.DeleteExpiredSessionsParams{
+				Now: now.Unix(), IdleBefore: now.Add(-sessionIdleTimeout).Unix(),
+			})
+			if err != nil {
+				s.log.Warn("session cleanup failed", "err", err)
+			} else if n > 0 {
+				s.log.Debug("expired sessions removed", "count", n)
+			}
+			s.loginLimiter.prune()
+		}
+	}
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, version.Get())
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 func securityHeaders(next http.Handler) http.Handler {

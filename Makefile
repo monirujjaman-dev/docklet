@@ -12,7 +12,7 @@ DIST     := internal/server/dist
 
 export CGO_ENABLED := 0
 
-.PHONY: all build build-go web web-deps dev dev-go dev-web test lint fmt clean release
+.PHONY: all build build-go web web-deps dev dev-go dev-web test lint fmt sqlc clean release
 
 all: build
 
@@ -34,7 +34,7 @@ dev:
 	@$(MAKE) -j2 dev-go dev-web
 
 dev-go:
-	go run ./cmd/docklet serve -addr 127.0.0.1:3000 -log-level debug
+	go run ./cmd/docklet serve -addr 127.0.0.1:3000 -data-dir ./data -log-level debug
 
 dev-web:
 	cd web && npm run dev
@@ -51,6 +51,10 @@ lint:
 
 fmt:
 	gofmt -s -w .
+
+## sqlc: regenerate typed queries from migrations/ + internal/store/queries/
+sqlc:
+	sqlc generate
 
 ## release: cross-compile linux amd64 + arm64 into ./bin
 release: web

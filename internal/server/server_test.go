@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +11,7 @@ import (
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	s := New(Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	ts := httptest.NewServer(s.Handler())
-	t.Cleanup(ts.Close)
+	ts, _ := newTestEnv(t)
 	return ts
 }
 
