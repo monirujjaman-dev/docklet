@@ -7,7 +7,14 @@
   let { projectId }: { projectId: string } = $props();
 
   let name = $state("");
+  let source = $state<"image" | "git">("image");
   let image = $state("");
+  let gitUrl = $state("");
+  let gitBranch = $state("main");
+  let gitContext = $state(".");
+  let gitDockerfile = $state("Dockerfile");
+  let autoDeploy = $state(true);
+  const isSSH = $derived(/^(ssh:\/\/|[\w.-]+@[\w.-]+:)/.test(gitUrl.trim()));
   let port = $state("");
   let domains = $state("");
   let envText = $state("");
@@ -30,7 +37,17 @@
       const res = await api<{ id: number }>(`/projects/${projectId}/apps`, {
         json: {
           name: name.trim(),
-          image: image.trim(),
+          ...(source === "image"
+            ? { image: image.trim() }
+            : {
+                git: {
+                  url: gitUrl.trim(),
+                  branch: gitBranch.trim(),
+                  context: gitContext.trim(),
+                  dockerfile: gitDockerfile.trim(),
+                  autoDeploy,
+                },
+              }),
           port: port ? Number(port) : 0,
           domains: domains.split(/[\s,]+/).filter(Boolean),
           env,
@@ -53,7 +70,37 @@
 <form onsubmit={submit} class="max-w-2xl space-y-4">
   <div class="grid gap-4 md:grid-cols-2">
     <Field label="Name" bind:value={name} hint="Lowercase letters, digits and '-'; also the hostname on the project network" />
-    <Field label="Image" bind:value={image} hint="e.g. nginx:alpine or ghcr.io/org/app:1.2" />
+    <div class="md:col-span-2">
+      <span class="block text-sm text-neutral-300 mb-1">Source</span>
+      <div class="inline-flex rounded-md border border-neutral-700 p-0.5" role="radiogroup" aria-label="Source">
+        {#each [["image", "Registry image"], ["git", "Git repository"]] as [id, label]}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={source === id}
+            onclick={() => (source = id as "image" | "git")}
+            class="px-3 py-1.5 text-sm rounded {source === id ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'}"
+            >{label}</button
+          >
+        {/each}
+      </div>
+    </div>
+    {#if source === "image"}
+      <Field label="Image" bind:value={image} hint="e.g. nginx:alpine or ghcr.io/org/app:1.2" />
+    {:else}
+      <Field label="Repository URL" bind:value={gitUrl} hint="https://github.com/org/repo.git, or git@github.com:org/repo.git for private repos" />
+      <Field label="Branch" bind:value={gitBranch} />
+      <Field label="Build context" bind:value={gitContext} hint="Directory inside the repo, usually ." />
+      <Field label="Dockerfile" bind:value={gitDockerfile} hint="Path inside the repo" />
+      <label class="flex items-center gap-2 text-sm text-neutral-300 md:col-span-2">
+        <input type="checkbox" bind:checked={autoDeploy} /> Deploy automatically on every push (webhook)
+      </label>
+      {#if isSSH}
+        <p class="md:col-span-2 text-sm text-amber-300">
+          Private repository: after creating the app, add its deploy key to the repository, then press Deploy.
+        </p>
+      {/if}
+    {/if}
     <Field label="Container port" bind:value={port} inputmode="numeric" hint="Leave empty to use the port the image exposes" />
     <Field label="Domains" bind:value={domains} hint="Comma or space separated; DNS must point here" />
     <Field label="Memory limit (MB)" bind:value={memoryMb} inputmode="numeric" hint="Empty = no limit" />
@@ -80,6 +127,6 @@
   </label>
   {#if error}<p class="text-sm text-red-400">{error}</p>{/if}
   <button disabled={busy} class="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-2 text-sm font-medium">
-    {busy ? "Creating…" : "Create and deploy"}
+    {busy ? "Creating…" : source === "git" && isSSH ? "Create app" : "Create and deploy"}
   </button>
 </form>

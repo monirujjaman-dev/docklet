@@ -55,11 +55,40 @@ func (f *Fake) ImagePull(_ context.Context, ref string, p func(string)) error {
 func (f *Fake) ImageInspect(_ context.Context, ref string) (docker.Image, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if img, ok := f.images[ref]; ok {
+		return img, nil
+	}
+	for _, img := range f.images { // lookup by image id
+		if img.ID == ref {
+			return img, nil
+		}
+	}
+	return docker.Image{}, docker.ErrNotFound
+}
+
+// ImageRemove deletes a tag; images used by a container are kept (conflict).
+func (f *Fake) ImageRemove(_ context.Context, ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	img, ok := f.images[ref]
 	if !ok {
-		return img, docker.ErrNotFound
+		return nil
 	}
-	return img, nil
+	for _, c := range f.containers {
+		if c.Spec.Image == ref || c.Spec.Image == img.ID {
+			return docker.ErrConflict
+		}
+	}
+	delete(f.images, ref)
+	return nil
+}
+
+// HasImage reports whether a tag exists.
+func (f *Fake) HasImage(ref string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.images[ref]
+	return ok
 }
 func (f *Fake) NetworkEnsure(_ context.Context, name string, _ map[string]string) error {
 	f.mu.Lock()

@@ -3,7 +3,7 @@
 A lightweight, self-hosted PaaS for a single VPS, built directly on **Docker** and **Caddy**.
 One Go binary, SQLite, zero-config TLS, and a lean control plane so your server's RAM goes to your apps.
 
-> Status: **M4 — monitoring**. Git builds, databases, workers and cron come next.
+> Status: **M5 — Git builds, webhooks and rollback**. Managed databases, workers and cron come next.
 
 ## Goals
 
@@ -70,6 +70,22 @@ Every 30 s Docklet compares Docker with its database:
 
 Interrupted deploy jobs resume when Docklet restarts.
 
+### Git builds, webhooks and rollback
+
+An app can deploy from a **Git repository** instead of a registry image. For each deploy, Docklet:
+1. clones the branch (shallow);
+2. builds the repository's Dockerfile with the docker CLI (BuildKit), so cache mounts and `# syntax=` work;
+3. tags the image `docklet/<project>-<app>:d<N>` and deploys it like any other image.
+
+Build output streams into the deployment log while it runs. By default one build runs at a time, each with a 20 minute limit (`-build-timeout`). Builds need `git`, `openssh-client` and the docker CLI with buildx on the host; the container image includes them.
+
+- **Private repositories:** use an SSH URL (`git@github.com:org/repo.git`). Each app gets its own ed25519 **deploy key**: add the public key to the repository as a read-only deploy key. URLs that contain credentials are rejected.
+- **Webhooks:** every Git app has a webhook URL and secret. Add a *push* webhook in GitHub, Gitea/Forgejo or GitLab, with content type `application/json`. Docklet checks `X-Hub-Signature-256`, `X-Gitea-Signature` or `X-Gitlab-Token` and deploys pushes to the app's branch.
+- **Rollback:** any earlier successful deployment whose image still exists can be redeployed as-is, with no build or pull.
+- **Image cleanup:** Docklet keeps the 5 newest built images per app and removes older ones.
+
+Builds without a Dockerfile (Railpack) are not supported yet.
+
 ### Monitoring
 
 **Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.
@@ -100,7 +116,8 @@ After editing SQL in `migrations/` or `internal/store/queries/`, run `make sqlc`
 cmd/docklet/        CLI entrypoint (serve, audit verify, admin reset-password, version)
 internal/server/    HTTP API, sessions, CSRF, rate limiting, panel domain, embedded SPA (dist/)
 internal/caddy/     Caddy config builder, Admin API client, reconciler
-internal/apps/      deploy pipeline, job workers, lifecycle, Docker reconciler
+internal/apps/      deploy pipeline (pull / build / rollback), job workers, lifecycle, Docker reconciler, image cleanup
+internal/build/     git clone + docker build (BuildKit) with streamed logs; deploy keys
 internal/metrics/   host (/proc) and container (cgroup v2 or Docker stats) sampling, ring buffers, minute rollups
 internal/docker/    minimal Docker Engine API client (stdlib only); dockertest/ is an in-memory fake
 internal/auth/      argon2id, TOTP (RFC 6238), tokens

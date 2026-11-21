@@ -23,6 +23,16 @@ type App struct {
 	CurrentDeploymentID sql.NullInt64
 	CreatedAt           int64
 	UpdatedAt           int64
+	SourceType          string
+	GitUrl              string
+	GitBranch           string
+	BuildContext        string
+	Dockerfile          string
+	DeployKeyEnc        []byte
+	DeployKeyPub        string
+	WebhookToken        sql.NullString
+	WebhookSecretEnc    []byte
+	AutoDeploy          int64
 }
 
 type AuditLog struct {
@@ -39,20 +49,25 @@ type AuditLog struct {
 }
 
 type Deployment struct {
-	ID          int64
-	AppID       int64
-	Image       string
-	ImageID     string
-	Port        int64
-	Status      string
-	ContainerID string
-	ContainerIp string
-	Error       string
-	Log         string
-	CreatedBy   string
-	CreatedAt   int64
-	StartedAt   int64
-	FinishedAt  int64
+	ID            int64
+	AppID         int64
+	Image         string
+	ImageID       string
+	Port          int64
+	Status        string
+	ContainerID   string
+	ContainerIp   string
+	Error         string
+	Log           string
+	CreatedBy     string
+	CreatedAt     int64
+	StartedAt     int64
+	FinishedAt    int64
+	Source        string
+	CommitSha     string
+	CommitMessage string
+	RollbackOf    sql.NullInt64
+	ImagePruned   int64
 }
 
 type Domain struct {

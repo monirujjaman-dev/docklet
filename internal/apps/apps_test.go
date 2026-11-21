@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/docker/dockertest"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
@@ -196,7 +197,7 @@ func TestReconcileDetectsMissingAndOrphans(t *testing.T) {
 	dep, _ := e.deploy(t, "hello:v1")
 
 	// An orphan from a failed deployment.
-	failed, _ := e.st.Q.CreateDeployment(ctx, db.CreateDeploymentParams{AppID: e.app.ID, Image: "x", CreatedBy: "t", CreatedAt: 1})
+	failed, _ := e.st.Q.CreateDeployment(ctx, db.CreateDeploymentParams{AppID: e.app.ID, Image: "x", Source: SourceImage, CreatedBy: "t", CreatedAt: 1})
 	_ = e.st.Q.SetDeploymentStatus(ctx, db.SetDeploymentStatusParams{Status: DeployFailed, ID: failed.ID})
 	_, _ = e.dk.ContainerCreate(ctx, docker.ContainerSpec{Name: "orphan", Labels: map[string]string{LabelManaged: "true", LabelDeployment: fmt.Sprint(failed.ID)}})
 
@@ -320,5 +321,162 @@ func TestAttachContainersJoinProjectNetwork(t *testing.T) {
 		if !e.dk.Attached(net, c) {
 			t.Errorf("%s not attached to %s", c, net)
 		}
+	}
+}
+
+// fakeBuilder "builds" by registering the tag in the fake Docker. Commits
+// whose message contains "broken" fail like a bad Dockerfile would.
+type fakeBuilder struct {
+	dk     *dockertest.Fake
+	mu     sync.Mutex
+	builds int
+	msg    string
+}
+
+func (b *fakeBuilder) Build(_ context.Context, spec build.Spec, logf func(string)) (build.Result, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.builds++
+	logf("Cloning " + spec.RepoURL)
+	if strings.Contains(b.msg, "broken") {
+		logf("  ERROR: failed to solve: process \"/bin/sh -c make\" did not complete successfully")
+		return build.Result{CommitSHA: fmt.Sprintf("%040d", b.builds), CommitMessage: b.msg}, errors.New("docker build: exit status 1")
+	}
+	b.dk.AddImage(spec.Tag, 8080)
+	return build.Result{CommitSHA: fmt.Sprintf("%040d", b.builds), CommitMessage: b.msg}, nil
+}
+
+func (e *env) makeGit(t *testing.T) *fakeBuilder {
+	t.Helper()
+	fb := &fakeBuilder{dk: e.dk, msg: "initial"}
+	e.svc.Builder = fb
+	if err := e.st.Q.SetAppGitSource(context.Background(), db.SetAppGitSourceParams{
+		GitUrl: "https://example.com/org/site.git", GitBranch: "main", BuildContext: ".", Dockerfile: "Dockerfile",
+		AutoDeploy: 1, UpdatedAt: 2, ID: e.app.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return fb
+}
+
+func (e *env) deployCurrent(t *testing.T) (db.Deployment, error) {
+	t.Helper()
+	ctx := context.Background()
+	app := e.current(t)
+	var dep db.Deployment
+	if err := e.st.Tx(ctx, func(q *db.Queries) error {
+		var err error
+		dep, err = e.svc.EnqueueDeploy(ctx, q, app, "webhook")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	derr := e.svc.runDeploy(ctx, dep.ID)
+	dep, _ = e.st.Q.GetDeployment(ctx, dep.ID)
+	return dep, derr
+}
+
+func TestGitDeployBuildsAndRecordsCommit(t *testing.T) {
+	e := setup(t, "hello:v1")
+	e.makeGit(t)
+	dep, err := e.deployCurrent(t)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, dep.Log)
+	}
+	if dep.Source != SourceGit || !strings.HasPrefix(dep.Image, "docklet/web-site:d") || dep.CommitMessage != "initial" || len(dep.CommitSha) != 40 {
+		t.Fatalf("dep = %+v", dep)
+	}
+	if run := e.dk.Running(); len(run) != 1 || run[0].Spec.Image != dep.Image {
+		t.Fatalf("running = %+v", run)
+	}
+}
+
+func TestFailedBuildKeepsCurrent(t *testing.T) {
+	e := setup(t, "hello:v1")
+	fb := e.makeGit(t)
+	good, _ := e.deployCurrent(t)
+	fb.msg = "broken commit"
+	bad, err := e.deployCurrent(t)
+	if err == nil || bad.Status != DeployFailed || !strings.Contains(bad.Log, "failed to solve") || bad.CommitMessage != "broken commit" {
+		t.Fatalf("bad = %s %v\n%s", bad.Status, err, bad.Log)
+	}
+	if e.current(t).CurrentDeploymentID.Int64 != good.ID {
+		t.Fatal("current changed after failed build")
+	}
+	if run := e.dk.Running(); len(run) != 1 || run[0].Spec.Image != good.Image {
+		t.Fatal("previous version not running")
+	}
+}
+
+func TestRollbackReusesImageWithoutBuild(t *testing.T) {
+	e := setup(t, "hello:v1")
+	fb := e.makeGit(t)
+	ctx := context.Background()
+	first, _ := e.deployCurrent(t)
+	fb.msg = "second"
+	_, _ = e.deployCurrent(t)
+	buildsBefore := fb.builds
+
+	first, _ = e.st.Q.GetDeployment(ctx, first.ID)
+	app := e.current(t)
+	var rb db.Deployment
+	if err := e.st.Tx(ctx, func(q *db.Queries) error {
+		var err error
+		rb, err = e.svc.EnqueueRollback(ctx, q, app, first, "admin")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.runDeploy(ctx, rb.ID); err != nil {
+		t.Fatal(err)
+	}
+	rb, _ = e.st.Q.GetDeployment(ctx, rb.ID)
+	if fb.builds != buildsBefore || rb.Status != DeploySucceeded || !strings.Contains(rb.Log, "no build or pull") {
+		t.Fatalf("rollback rebuilt or failed: builds %d->%d, %s\n%s", buildsBefore, fb.builds, rb.Status, rb.Log)
+	}
+	if run := e.dk.Running(); len(run) != 1 || run[0].Spec.Image != first.ImageID {
+		t.Fatalf("running = %+v, want image %s", run, first.ImageID)
+	}
+
+	// A failed deployment cannot be a rollback target.
+	failed := first
+	failed.Status = DeployFailed
+	if _, err := e.svc.EnqueueRollback(ctx, e.st.Q, app, failed, "admin"); !errors.Is(err, ErrNotRollbackable) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCleanupKeepsNewestImages(t *testing.T) {
+	e := setup(t, "hello:v1")
+	fb := e.makeGit(t)
+	e.svc.KeepImages = 2
+	var deps []db.Deployment
+	for i := 0; i < 5; i++ {
+		fb.msg = fmt.Sprintf("commit %d", i)
+		d, err := e.deployCurrent(t)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deps = append(deps, d)
+	}
+	for i, d := range deps {
+		want := i >= 3 // newest two kept
+		if got := e.dk.HasImage(d.Image); got != want {
+			t.Errorf("deployment %d image present=%v, want %v", i, got, want)
+		}
+		d, _ = e.st.Q.GetDeployment(context.Background(), d.ID)
+		if (d.ImagePruned == 1) == want {
+			t.Errorf("deployment %d image_pruned=%d", i, d.ImagePruned)
+		}
+	}
+}
+
+func TestGitDeployWithoutBuilder(t *testing.T) {
+	e := setup(t, "hello:v1")
+	e.makeGit(t)
+	e.svc.Builder = nil
+	dep, err := e.deployCurrent(t)
+	if err == nil || !strings.Contains(dep.Error, "builds are not available") {
+		t.Fatalf("%v %q", err, dep.Error)
 	}
 }

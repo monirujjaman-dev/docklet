@@ -43,14 +43,45 @@ UPDATE apps SET current_deployment_id = ?, updated_at = ? WHERE id = ?;
 DELETE FROM apps WHERE id = ?;
 
 -- name: CreateDeployment :one
-INSERT INTO deployments (app_id, image, created_by, created_at) VALUES (?, ?, ?, ?) RETURNING *;
+INSERT INTO deployments (app_id, image, image_id, source, rollback_of, created_by, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *;
 
 -- name: GetDeployment :one
 SELECT * FROM deployments WHERE id = ?;
 
 -- name: ListAppDeployments :many
-SELECT id, app_id, image, image_id, port, status, container_id, container_ip, error, created_by, created_at, started_at, finished_at
+SELECT id, app_id, image, image_id, port, status, container_id, container_ip, error, created_by, created_at, started_at, finished_at,
+       source, commit_sha, commit_message, rollback_of, image_pruned
 FROM deployments WHERE app_id = ? ORDER BY id DESC LIMIT ?;
+
+-- name: SetDeploymentBuild :exec
+UPDATE deployments SET image = ?, commit_sha = ?, commit_message = ? WHERE id = ?;
+
+-- name: UpdateDeploymentLog :exec
+UPDATE deployments SET log = ? WHERE id = ?;
+
+-- name: ListPrunableBuilds :many
+-- Built images of an app, newest first; cleanup keeps the first N.
+SELECT id, image, image_id FROM deployments
+WHERE app_id = ? AND source IN ('git', 'rollback') AND status IN ('succeeded', 'superseded')
+  AND image_pruned = 0 AND image LIKE 'docklet/%'
+ORDER BY id DESC;
+
+-- name: MarkImagePruned :exec
+UPDATE deployments SET image_pruned = 1 WHERE app_id = ? AND image = ?;
+
+-- name: SetAppGitSource :exec
+UPDATE apps SET source_type = 'git', git_url = ?, git_branch = ?, build_context = ?, dockerfile = ?, auto_deploy = ?, updated_at = ?
+WHERE id = ?;
+
+-- name: SetAppDeployKey :exec
+UPDATE apps SET deploy_key_enc = ?, deploy_key_pub = ?, updated_at = ? WHERE id = ?;
+
+-- name: SetAppWebhook :exec
+UPDATE apps SET webhook_token = ?, webhook_secret_enc = ?, updated_at = ? WHERE id = ?;
+
+-- name: GetAppByWebhookToken :one
+SELECT * FROM apps WHERE webhook_token = ?;
 
 -- name: StartDeployment :exec
 UPDATE deployments SET status = 'running', started_at = ?, error = '', log = '' WHERE id = ?;

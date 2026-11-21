@@ -46,8 +46,10 @@ type Server struct {
 	box           *secrets.Box
 	now           func() time.Time
 	loginLimiter  *rateLimiter
-	http          *http.Server
-	lm            *listenerMgr
+	// Up to 30 webhook calls per minute per token.
+	webhookLimiter *rateLimiter
+	http           *http.Server
+	lm             *listenerMgr
 
 	caddy     *caddy.Reconciler
 	caddyOpts caddy.Options
@@ -128,6 +130,7 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 	}
 	// 10 attempts per minute per IP for login/setup, on top of per-account lockout.
 	s.loginLimiter = newRateLimiter(10, time.Minute, func() time.Time { return s.now() })
+	s.webhookLimiter = newRateLimiter(30, time.Minute, func() time.Time { return s.now() })
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           s.routes(),
@@ -186,6 +189,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/restart", authed(s.handleLifecycle("restart")))
 	mux.HandleFunc("GET /api/apps/{id}/logs", authed(s.handleAppLogs))
 	mux.HandleFunc("GET /api/deployments/{id}", authed(s.handleGetDeployment))
+	mux.HandleFunc("PUT /api/apps/{id}/git", authed(s.handleUpdateGit))
+	mux.HandleFunc("POST /api/apps/{id}/deploy-key", authed(s.handleRegenerateDeployKey))
+	mux.HandleFunc("GET /api/apps/{id}/webhook", authed(s.handleGetWebhook))
+	mux.HandleFunc("POST /api/apps/{id}/webhook/rotate", authed(s.handleRotateWebhook))
+	mux.HandleFunc("POST /api/apps/{id}/rollback", authed(s.handleRollback))
+	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
 	mux.HandleFunc("GET /api/metrics/status", authed(s.handleMetricsStatus))
 	mux.HandleFunc("GET /api/metrics/recent", authed(s.handleMetricsRecent))
@@ -280,6 +289,7 @@ func (s *Server) janitor(ctx context.Context) {
 				s.log.Debug("expired sessions removed", "count", n)
 			}
 			s.loginLimiter.prune()
+			s.webhookLimiter.prune()
 		}
 	}
 }

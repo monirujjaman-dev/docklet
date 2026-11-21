@@ -105,6 +105,16 @@ func (c *Client) ImageInspect(ctx context.Context, ref string) (Image, error) {
 	return img, err
 }
 
+// ImageRemove deletes an image by tag or id (not found is not an error).
+// An image still used by a container yields ErrConflict.
+func (c *Client) ImageRemove(ctx context.Context, ref string) error {
+	err := c.do(ctx, http.MethodDelete, "/images/"+url.PathEscape(ref), nil, nil, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // NetworkEnsure creates a bridge network if it does not exist.
 func (c *Client) NetworkEnsure(ctx context.Context, name string, labels map[string]string) error {
 	err := c.do(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil, nil, nil)

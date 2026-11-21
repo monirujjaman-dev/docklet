@@ -158,11 +158,9 @@ func TestPanelDomainVerifiedRestrictsToLoopback(t *testing.T) {
 	waitFor(t, "active", func() bool { return env.status(t, c)["status"] == "active" })
 	waitFor(t, "loopback listener", func() bool { return strings.HasPrefix(env.srv.Addr(), "127.0.0.1:") })
 
-	cfg := env.caddy.json()
+	// The reconciler applies the route asynchronously.
 	for _, want := range []string{`"panel.example.com"`, `"dial":"` + loopbackAddr(env.srv.lm.port()) + `"`, `"email":"ops@example.com"`} {
-		if !strings.Contains(cfg, want) {
-			t.Fatalf("caddy config missing %s: %s", want, cfg)
-		}
+		waitFor(t, "caddy config with "+want, func() bool { return strings.Contains(env.caddy.json(), want) })
 	}
 	acts := strings.Join(actionsOf(t, env.st), ",")
 	if !strings.Contains(acts, "settings.panel_domain_set") || !strings.Contains(acts, "settings.panel_verified") {

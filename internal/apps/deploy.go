@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/audit"
+	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
@@ -73,6 +74,24 @@ func (s *Service) runDeploy(ctx context.Context, depID int64) error {
 	}
 	lg.printf("Deployment #%d of %s/%s started by %s", dep.ID, project.Name, app.Name, dep.CreatedBy)
 
+	// Save the log every 2 s so the dashboard can follow long builds.
+	flushCtx, stopFlush := context.WithCancel(ctx)
+	flushed := make(chan struct{})
+	go func() {
+		defer close(flushed)
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-flushCtx.Done():
+				return
+			case <-t.C:
+				_ = s.st.Q.UpdateDeploymentLog(flushCtx, db.UpdateDeploymentLogParams{Log: lg.String(), ID: dep.ID})
+			}
+		}
+	}()
+	defer func() { stopFlush(); <-flushed }()
+
 	containerID, derr := s.deploySteps(ctx, lg, project, app, dep)
 	if derr != nil {
 		if containerID != "" {
@@ -86,8 +105,40 @@ func (s *Service) runDeploy(ctx context.Context, depID int64) error {
 		return derr
 	}
 	lg.printf("Deployment succeeded.")
+	stopFlush()
+	<-flushed
 	s.finish(ctx, app, dep, DeploySucceeded, "", lg.String(), audit.ActionDeploySucceeded)
+	s.cleanupImages(context.WithoutCancel(ctx), app.ID)
 	return nil
+}
+
+// cleanupImages removes built images beyond the newest KeepImages per app.
+// Images still used by a container are skipped and retried next time.
+func (s *Service) cleanupImages(ctx context.Context, appID int64) {
+	rows, err := s.st.Q.ListPrunableBuilds(ctx, appID)
+	if err != nil {
+		s.log.Warn("list images for cleanup", "err", err)
+		return
+	}
+	kept, seen := map[string]bool{}, map[string]bool{}
+	for _, r := range rows {
+		if seen[r.Image] { // rollbacks share their target's tag
+			continue
+		}
+		seen[r.Image] = true
+		if len(kept) < s.KeepImages {
+			kept[r.Image] = true
+			continue
+		}
+		if err := s.dk.ImageRemove(ctx, r.Image); err != nil {
+			if !errors.Is(err, docker.ErrConflict) {
+				s.log.Warn("remove old image", "image", r.Image, "err", err)
+			}
+			continue
+		}
+		_ = s.st.Q.MarkImagePruned(ctx, db.MarkImagePrunedParams{AppID: appID, Image: r.Image})
+		s.log.Info("removed old build image", "image", r.Image)
+	}
 }
 
 func (s *Service) finish(ctx context.Context, app db.App, dep db.Deployment, status, errMsg, log, action string) {
@@ -113,16 +164,77 @@ func (s *Service) finish(ctx context.Context, app db.App, dep db.Deployment, sta
 	}
 }
 
-func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Project, app db.App, dep db.Deployment) (string, error) {
-	image := dep.Image
-
-	// 1. Pull. A local image is accepted if the registry is unreachable.
-	lg.printf("Pulling %s", image)
-	if err := s.dk.ImagePull(ctx, image, func(line string) { lg.printf("  %s", line) }); err != nil {
-		if _, ierr := s.dk.ImageInspect(ctx, image); ierr != nil {
-			return "", fmt.Errorf("pull %s: %w", image, err)
+// resolveImage pulls, builds or reuses the deployment's image and returns
+// the reference to run.
+func (s *Service) resolveImage(ctx context.Context, lg *deployLog, project db.Project, app db.App, dep db.Deployment) (string, error) {
+	switch dep.Source {
+	case SourceRollback:
+		lg.printf("Rolling back to the image of deployment #%d (%s), no build or pull", dep.RollbackOf.Int64, shortImageID(dep.ImageID))
+		if _, err := s.dk.ImageInspect(ctx, dep.ImageID); err != nil {
+			return "", fmt.Errorf("%w (%s)", ErrNotRollbackable, shortImageID(dep.ImageID))
 		}
-		lg.printf("Pull failed (%v); using the image already on this host", err)
+		return dep.ImageID, nil
+
+	case SourceGit:
+		if s.Builder == nil {
+			return "", errors.New("builds are not available on this server (git and the docker CLI are required)")
+		}
+		var key []byte
+		if len(app.DeployKeyEnc) > 0 {
+			k, err := s.box.Open(app.DeployKeyEnc, DeployKeyAAD(app.ID))
+			if err != nil {
+				return "", fmt.Errorf("decrypt deploy key: %w", err)
+			}
+			key = k
+		}
+		tag := fmt.Sprintf("docklet/%s-%s:d%d", strings.ToLower(project.Name), strings.ToLower(app.Name), dep.ID)
+		res, err := s.Builder.Build(ctx, build.Spec{
+			RepoURL: app.GitUrl, Branch: app.GitBranch, Context: app.BuildContext, Dockerfile: app.Dockerfile,
+			PrivateKey: key, Tag: tag,
+			Labels: map[string]string{LabelManaged: "true", LabelApp: fmt.Sprint(app.ID), LabelDeployment: fmt.Sprint(dep.ID)},
+		}, func(line string) { lg.printf("%s", line) })
+		if err != nil {
+			if res.CommitSHA != "" { // record which commit broke the build
+				_ = s.st.Q.SetDeploymentBuild(ctx, db.SetDeploymentBuildParams{
+					Image: "", CommitSha: res.CommitSHA, CommitMessage: res.CommitMessage, ID: dep.ID,
+				})
+			}
+			return "", err
+		}
+		if err := s.st.Q.SetDeploymentBuild(ctx, db.SetDeploymentBuildParams{
+			Image: tag, CommitSha: res.CommitSHA, CommitMessage: res.CommitMessage, ID: dep.ID,
+		}); err != nil {
+			return "", err
+		}
+		return tag, nil
+
+	default:
+		// A local image is accepted if the registry is unreachable.
+		image := dep.Image
+		lg.printf("Pulling %s", image)
+		if err := s.dk.ImagePull(ctx, image, func(line string) { lg.printf("  %s", line) }); err != nil {
+			if _, ierr := s.dk.ImageInspect(ctx, image); ierr != nil {
+				return "", fmt.Errorf("pull %s: %w", image, err)
+			}
+			lg.printf("Pull failed (%v); using the image already on this host", err)
+		}
+		return image, nil
+	}
+}
+
+func shortImageID(id string) string {
+	id = strings.TrimPrefix(id, "sha256:")
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
+func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Project, app db.App, dep db.Deployment) (string, error) {
+	// 1. Get the image: pull, build from Git, or reuse for a rollback.
+	image, err := s.resolveImage(ctx, lg, project, app, dep)
+	if err != nil {
+		return "", err
 	}
 	img, err := s.dk.ImageInspect(ctx, image)
 	if err != nil {
