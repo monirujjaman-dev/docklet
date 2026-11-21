@@ -48,6 +48,10 @@ services:
       DOCKLET_TRUSTED_PROXIES: 172.30.0.2
       DOCKLET_ATTACH_CONTAINERS: docklet,docklet-caddy
       DOCKLET_LOG_LEVEL: ${DOCKLET_LOG_LEVEL:-info}
+      # Host ports, so the firewall never blocks them (Server → Security).
+      DOCKLET_PANEL_PORT: "${DOCKLET_PORT:-3000}"
+      DOCKLET_HTTP_PORT: "${DOCKLET_HTTP_PORT:-80}"
+      DOCKLET_HTTPS_PORT: "${DOCKLET_HTTPS_PORT:-443}"
       # Host metrics: read the host's /proc and cgroup tree (read-only).
       DOCKLET_HOST_PROC: /host/proc
       DOCKLET_HOST_CGROUP: /host/sys/fs/cgroup

@@ -139,6 +139,10 @@ func (h *Helper) Run(ctx context.Context, argv []string, env []string) (Result, 
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
+	// A caller that set its own deadline (package installs) gets that instead.
+	if dl, ok := ctx.Deadline(); ok && h.Timeout == 0 {
+		timeout = time.Until(dl)
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var rnd [6]byte

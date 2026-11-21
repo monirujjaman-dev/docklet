@@ -116,6 +116,7 @@ type Database struct {
 	CreatedAt           int64
 	UpdatedAt           int64
 	BackupDestinationID sql.NullInt64
+	PublicAllow         string
 }
 
 type DatabaseLink struct {

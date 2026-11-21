@@ -54,6 +54,8 @@
     if (enable && !confirm(`Publish ${d?.name} on port ${port} of this server? Anyone who can reach that port can try to log in.`)) return;
     run("public", () => api(`/databases/${dbId}/public`, { method: "PUT", json: { port } }));
   }
+  let allow = $state("");
+  const saveAllow = () => run("allow", () => api(`/databases/${dbId}/allowlist`, { method: "PUT", json: { sources: allow } }));
 
   // Links
   let linkApp = $state("");
@@ -139,6 +141,7 @@
         schedule = d.backupSchedule;
         keep = String(d.backupKeep);
         publicPort = String(d.publicPort || d.port + 10000);
+        allow = d.publicAllow.join(", ");
         destSel = d.backupDestinationId ? String(d.backupDestinationId) : "";
         filled = true;
       }
@@ -227,8 +230,14 @@
         <h2 class="font-medium">Public access</h2>
         {#if d.publicPort}
           <p class="text-sm text-amber-300">
-            Published on port <strong>{d.publicPort}</strong> of this server. Restrict it with a firewall if only some hosts need it.
+            Published on port <strong>{d.publicPort}</strong> of this server{d.publicAllow.length ? `, reachable only from ${d.publicAllow.join(", ")}` : " to anyone"}.
           </p>
+          <div class="flex gap-2 items-end">
+            <label class="text-sm flex-1 max-w-md">Allowed sources (IPv4 or CIDR; empty = anyone)
+              <input bind:value={allow} placeholder="203.0.113.7, 10.0.0.0/8" class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-1.5 text-sm font-mono" /></label>
+            <button onclick={saveAllow} disabled={!!busy || allow === d.publicAllow.join(", ")} class="rounded-md border border-neutral-700 hover:border-neutral-500 px-3 py-1.5 text-sm">Save</button>
+          </div>
+          <p class="text-xs text-neutral-500">Enforced in the server's iptables (Docker-published ports skip ufw). Containers on this server are not affected.</p>
           <button onclick={() => setPublic(false)} disabled={!!busy} class="rounded-md border border-neutral-700 hover:border-neutral-500 px-3 py-1.5 text-sm">Make private</button>
         {:else}
           <p class="text-sm text-neutral-400">

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { bytes } from "../lib/format";
+  import SecurityPanel from "../lib/SecurityPanel.svelte";
 
   type Overview = {
     os: { id: string; versionId: string; prettyName: string; systemd: boolean; supported: boolean };
@@ -15,7 +16,7 @@
   type Item = { id: string; name: string; size: number; detail?: string };
   type Category = { key: string; label: string; size: number; items?: Item[]; optIn?: boolean; note?: string };
 
-  let tab = $state<"overview" | "cleanup" | "ports" | "processes" | "services">("overview");
+  let tab = $state<"overview" | "security" | "cleanup" | "ports" | "processes" | "services">("overview");
   let o = $state<Overview | null>(null);
   let error = $state("");
   let msg = $state("");
@@ -152,7 +153,7 @@
     return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
   };
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
-  const tabs = [["overview", "Overview"], ["cleanup", "Disk cleanup"], ["ports", "Listening ports"], ["processes", "Processes"], ["services", "Services"]] as const;
+  const tabs = [["overview", "Overview"], ["security", "Security"], ["cleanup", "Disk cleanup"], ["ports", "Listening ports"], ["processes", "Processes"], ["services", "Services"]] as const;
   const input = "rounded-md bg-neutral-900 border border-neutral-700 px-3 py-1.5 text-sm outline-none focus:border-emerald-500";
   const btn = "rounded-md border border-neutral-700 hover:border-neutral-500 px-3 py-1.5 text-sm disabled:opacity-50";
   const card = "rounded-lg border border-neutral-800 p-4 space-y-3";
@@ -245,6 +246,8 @@
       <p class="text-xs text-neutral-500">10 is a good value for servers: swap is used only under memory pressure. Default is 60. Both settings survive reboots.</p>
     </section>
   </div>
+{:else if tab === "security"}
+  <SecurityPanel supported={o.os.supported} />
 {:else if tab === "cleanup"}
   <section class="max-w-4xl space-y-4">
     <div class="flex items-center justify-between">

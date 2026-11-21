@@ -48,6 +48,69 @@ extra is installed. See ADR-002 in the project for the reasoning.
 | Processes | Top 100 by CPU, with Stop (TERM) and Kill (KILL) |
 | Services | systemd services with state and boot setting: start, stop, restart, enable, disable, and the last 200 log lines |
 
+## Security tab
+
+The Security tab manages SSH, the ufw firewall and Fail2Ban. All of it is built so that a mistake can't lock you out of the server.
+
+### Confirm or undo
+
+Changing SSH settings and turning the firewall on are **confirm-or-undo** changes:
+
+1. Docklet applies the change and, in the same step, schedules a job **on the server itself** (`systemd-run`, unit `docklet-revert-*`) that puts the old settings back after 5 minutes.
+2. The page shows a banner with a countdown. For SSH, open a **new** SSH session with the new settings and keep the old one open.
+3. If the new settings work, click **It works, keep it**. If they don't, click **Undo now**, or do nothing: the server undoes the change by itself, even if Docklet or your browser is gone.
+
+Only one such change can be pending at a time. Both steps need your password.
+
+### SSH
+
+| Setting | How it's applied |
+|---|---|
+| Port | A new port is opened **next to** the old one (and allowed in ufw when ufw is on). On confirm the old port is closed in sshd and in ufw. Ports used by Docklet, Caddy or a public database are refused |
+| Root login | `PermitRootLogin`: SSH key only (`prohibit-password`), key or password (`yes`), or not allowed (`no`) |
+| Password login | `PasswordAuthentication` (and `KbdInteractiveAuthentication`). Turning it off is refused while no SSH key exists for root or a sudo user |
+
+The settings are written to `/etc/ssh/sshd_config.d/00-docklet.conf`. It sorts first, so it wins over `50-cloud-init.conf` and the main `sshd_config` (sshd uses the first value it reads). Every change is checked with `sshd -t` before sshd is restarted; a config sshd rejects is never applied. Ubuntu 22.10+ starts sshd from `ssh.socket`; Docklet runs `daemon-reload` and restarts the socket so the new port takes effect.
+
+**SSH keys** lists the `authorized_keys` of root and sudo users with their fingerprints. You can add a key (OpenSSH format: `ssh-ed25519 AAAA… comment`) for root or a sudo user, and remove one. Removing the last key while password login is off is refused.
+
+### Firewall (ufw)
+
+- **Install** runs `apt-get install ufw` if it's missing.
+- **Turn on** sets incoming to deny and outgoing to allow, after allowing these ports (they are always kept open):
+  - the SSH port(s);
+  - HTTP and HTTPS (TCP 80/443 and UDP 443 for HTTP/3, or `DOCKLET_HTTP_PORT` / `DOCKLET_HTTPS_PORT`);
+  - the panel port (`DOCKLET_PORT`, default 3000).
+- **Rules:** allow, deny, reject or limit a port or range (`6000:6100`), TCP/UDP/any, from anywhere or one IP/CIDR, with a comment.
+  - Deny and reject rules are inserted at the top, so they win over broader allows.
+  - A deny or reject that covers a protected port is refused, and so is deleting the last rule that lets a protected port in.
+  - A delete only goes through if the rule still reads the same as when you loaded the list (rule numbers shift when rules change).
+- **Default policies** for incoming and outgoing traffic.
+
+> **Docker-published ports skip ufw.** Docker sends traffic for published ports through the `FORWARD` chain, which ufw doesn't filter. That covers Caddy (80/443), the panel (3000) and public database ports. To limit who can reach a public database, use its page (below).
+
+### Public database allowlist
+
+On a database's page, after you publish a port, **Allowed sources** takes IPv4 addresses or CIDRs (empty = anyone).
+
+- Docklet keeps the rules in its own iptables chain `DOCKLET-USER`, jumped from Docker's `DOCKER-USER`.
+- Rules match on conntrack's original destination port and state `DNAT`, so only traffic that came in through the published port is filtered. Containers on the server still reach the database directly.
+- The rules are re-applied at startup and every 5 minutes, because a reboot or a Docker restart can drop them. They follow a change of the public port and are removed when the database is deleted.
+- IPv6 sources are not supported yet.
+
+### Fail2Ban
+
+- **Install** runs `apt-get install fail2ban python3-systemd`.
+- **Save** writes `/etc/fail2ban/jail.d/docklet.local` with an `sshd` jail:
+  - `backend = systemd`, on the current SSH port(s);
+  - failures before a ban, the time window, and the ban length (`-1` = forever);
+  - addresses that are never banned (`ignoreip`; localhost is always included);
+  - the ban action `nftables-multiport`, or `iptables-multiport` when `nft` is missing.
+- The config is checked with `fail2ban-client -t`, then fail2ban is restarted.
+- The page lists banned addresses with an **unban** button.
+
+Change the SSH port first, then save the Fail2Ban settings again so the jail watches the new port.
+
 ## What is protected
 
 - **Disk cleanup never removes:**
@@ -58,13 +121,20 @@ extra is installed. See ADR-002 in the project for the reasoning.
 - **Processes:** PID 1, kernel threads, `dockerd`, `containerd`, `docker-proxy`, `sshd`, Docklet and Caddy can't be signalled.
 - **Services:**
   - `docker`, `containerd`, `dbus`, `systemd-*` and `docklet*` can't be stopped, restarted or disabled;
-  - `ssh`/`sshd` can be restarted but not stopped or disabled. Changing SSH safely is part of M11.
+  - `ssh`/`sshd` can be restarted but not stopped or disabled; change SSH on the Security tab instead.
 - **Input validation:** host names must follow RFC 1123, time zones must be in the host's list, and unit names must be valid `*.service` names.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
+| "nothing to confirm: the host already undid the change" | The 5 minutes ran out (or the server rebooted) before you confirmed. The old settings are back; apply the change again |
+| "sshd_config does not include sshd_config.d/*.conf" | An old or customised `sshd_config` without `Include /etc/ssh/sshd_config.d/*.conf`. Add that line at the top |
+| "Docker's DOCKER-USER chain is missing" | Docker runs with `"iptables": false`, so it doesn't create the chain. The allowlist needs Docker's iptables integration |
 | "server management is unavailable: find Docklet's own container" | Docklet can't inspect its own container. Set `DOCKLET_HELPER_IMAGE` to its image (e.g. `ghcr.io/monirujjaman-dev/docklet:1.2.0`) |
 | "nsenter: can't open '/proc/1/ns/…': Permission denied" | The machine forbids entering PID 1's namespaces (some sandboxes do). On a normal VPS this doesn't happen. `DOCKLET_HOST_PID` can name another process in the host's namespaces |
 | "swapon failed: Invalid argument" | The root filesystem can't hold a swap file (e.g. overlayfs, or btrfs without nocow) |
+
+## Testing
+
+The security features are tested against a privileged systemd container that stands in for a VPS (`jrei/systemd-ubuntu:24.04` with `openssh-server`, `ufw`, `fail2ban` and `sshpass` installed, a root password and a sudo user `deploy`), with SSH logins from a second container. See `TestRealSecurity` in `internal/host/security_real_test.go`. `TestRealAllowlist` runs on a real Docker host and uses two network namespaces as outside clients. `DOCKLET_CONFIRM_WINDOW_SEC` shortens the 5-minute confirm window for end-to-end tests.
