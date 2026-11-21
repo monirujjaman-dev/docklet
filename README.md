@@ -86,6 +86,20 @@ Build output streams into the deployment log while it runs. By default one build
 
 Builds without a Dockerfile (Railpack) are not supported yet.
 
+### Databases
+
+**New database** on a project provisions PostgreSQL (17/16/18), MySQL 8.4, MariaDB 11.4 or Redis 7.4:
+
+- **Credentials.** A 28-character password (plus a root password for MySQL/MariaDB) is generated and stored encrypted. Revealing it in the dashboard is audited.
+- **Storage.** Data lives in a named volume, `docklet-db-<id>`, so it survives container recreation, restarts and Docklet upgrades.
+- **Network.** The container joins the project network under its own name (`postgres://main:…@main:5432/main`). No host port is published unless you enable **Public access** with an explicit port; that change is audited and recreates the container on the same volume.
+- **Link to app.** This writes the connection URL into an app's encrypted env, as `DATABASE_URL` or `REDIS_URL` by default. Redeploy the app to pick it up. Unlinking or deleting the database removes the variable again.
+- **Backups.** These use `pg_dump -Fc`, `mysqldump`/`mariadb-dump` (gzipped) or a Redis RDB snapshot. They are written to `<data-dir>/backups/<id>/` and can run on demand or on a schedule (off, hourly, daily or weekly; daily with keep 7 is the default).
+- **Restore.** Restoring first takes a safety `pre-restore` backup and aborts if that fails.
+- **Download.** Any backup can be downloaded from the dashboard.
+
+A database name is unique per project, across both apps and databases, since both are DNS names on the same network. Deleting a database keeps its volume and backups unless you choose to delete the data too.
+
 ### Monitoring
 
 **Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.

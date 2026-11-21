@@ -11,6 +11,8 @@
   import Monitoring from "./pages/Monitoring.svelte";
   import NewApp from "./pages/NewApp.svelte";
   import AppDetail from "./pages/AppDetail.svelte";
+  import NewDatabase from "./pages/NewDatabase.svelte";
+  import DatabaseDetail from "./pages/DatabaseDetail.svelte";
 
   const nav = [
     { href: "/", label: "Projects" },
@@ -22,10 +24,12 @@
 
   const active = (href: string) =>
     href === "/"
-      ? router.path === "/" || router.path.startsWith("/apps") || router.path.startsWith("/projects")
+      ? router.path === "/" || router.path.startsWith("/apps") || router.path.startsWith("/projects") || router.path.startsWith("/databases")
       : router.path.startsWith(href);
   const newAppRoute = $derived(match("/projects/:id/new", router.path));
   const appRoute = $derived(match("/apps/:id", router.path));
+  const newDbRoute = $derived(match("/projects/:id/new-database", router.path));
+  const dbRoute = $derived(match("/databases/:id", router.path));
 
   onMount(() => session.init());
 </script>
@@ -64,7 +68,11 @@
       </div>
     </aside>
     <main class="flex-1 p-8 overflow-auto">
-      {#if newAppRoute}
+      {#if newDbRoute}
+        <NewDatabase projectId={newDbRoute.id} />
+      {:else if dbRoute}
+        {#key dbRoute.id}<DatabaseDetail dbId={dbRoute.id} />{/key}
+      {:else if newAppRoute}
         <NewApp projectId={newAppRoute.id} />
       {:else if appRoute}
         {#key appRoute.id}<AppDetail appId={appRoute.id} />{/key}

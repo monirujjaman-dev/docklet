@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"archive/tar"
 	"bufio"
 	"context"
 	"encoding/binary"
@@ -203,6 +204,12 @@ type ContainerSpec struct {
 	RestartPolicy string // "no", "always", "unless-stopped", "on-failure"
 	NanoCPUs      int64
 	MemoryBytes   int64
+
+	Cmd     []string          // overrides the image CMD when set
+	Volumes map[string]string // named volume -> mount path
+	// Publish maps container TCP ports to host ports (0.0.0.0). Empty keeps
+	// the container reachable only on its Docker network.
+	Publish map[int]int
 }
 
 // ContainerCreate creates (but does not start) a container.
@@ -225,6 +232,22 @@ func (c *Client) ContainerCreate(ctx context.Context, s ContainerSpec) (string, 
 	if s.MemoryBytes > 0 {
 		host["Memory"] = s.MemoryBytes
 	}
+	if len(s.Volumes) > 0 {
+		var mounts []map[string]any
+		for vol, target := range s.Volumes {
+			mounts = append(mounts, map[string]any{"Type": "volume", "Source": vol, "Target": target})
+		}
+		host["Mounts"] = mounts
+	}
+	if len(s.Publish) > 0 {
+		bindings := map[string]any{}
+		for cport, hport := range s.Publish {
+			key := fmt.Sprintf("%d/tcp", cport)
+			exposed[key] = struct{}{}
+			bindings[key] = []map[string]string{{"HostIp": "0.0.0.0", "HostPort": strconv.Itoa(hport)}}
+		}
+		host["PortBindings"] = bindings
+	}
 	body := map[string]any{
 		"Image":        s.Image,
 		"Env":          s.Env,
@@ -232,6 +255,7 @@ func (c *Client) ContainerCreate(ctx context.Context, s ContainerSpec) (string, 
 		"Hostname":     s.Hostname,
 		"ExposedPorts": exposed,
 		"HostConfig":   host,
+		"Cmd":          s.Cmd,
 		"NetworkingConfig": map[string]any{
 			"EndpointsConfig": map[string]any{
 				s.Network: map[string]any{"Aliases": s.Aliases},
@@ -444,4 +468,155 @@ func (c *Client) ContainerStats(ctx context.Context, id string) (Stats, error) {
 	q := url.Values{"stream": {"false"}, "one-shot": {"true"}}
 	err := c.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/stats", q, nil, &st)
 	return st, err
+}
+
+// VolumeCreate creates a named volume (existing is not an error).
+func (c *Client) VolumeCreate(ctx context.Context, name string, labels map[string]string) error {
+	return c.do(ctx, http.MethodPost, "/volumes/create", nil, map[string]any{"Name": name, "Labels": labels}, nil)
+}
+
+// VolumeRemove deletes a named volume (not found is not an error).
+func (c *Client) VolumeRemove(ctx context.Context, name string) error {
+	err := c.do(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil, nil, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// ExecResult is the outcome of Exec.
+type ExecResult struct {
+	ExitCode int
+	Stderr   string // last 64 KiB
+}
+
+// Exec runs cmd in a running container. Stdout is streamed to stdout (may be
+// nil); stderr is captured. env adds variables, e.g. passwords that must not
+// appear in the process list.
+func (c *Client) Exec(ctx context.Context, id string, cmd, env []string, stdout io.Writer) (ExecResult, error) {
+	var res ExecResult
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/exec", nil, map[string]any{
+		"Cmd": cmd, "Env": env, "AttachStdout": true, "AttachStderr": true,
+	}, &created); err != nil {
+		return res, err
+	}
+	resp, err := c.request(ctx, http.MethodPost, "/exec/"+created.ID+"/start", nil, map[string]any{"Detach": false, "Tty": false})
+	if err != nil {
+		return res, err
+	}
+	stderr := &tailBuffer{max: 64 << 10}
+	derr := demuxTo(resp.Body, stdout, stderr)
+	_ = resp.Body.Close()
+	if derr != nil {
+		return res, derr
+	}
+	var info struct {
+		ExitCode int  `json:"ExitCode"`
+		Running  bool `json:"Running"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/exec/"+created.ID+"/json", nil, nil, &info); err != nil {
+		return res, err
+	}
+	res.ExitCode, res.Stderr = info.ExitCode, stderr.String()
+	return res, nil
+}
+
+// demuxTo copies a multiplexed stream to stdout/stderr writers.
+func demuxTo(r io.Reader, stdout, stderr io.Writer) error {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var hdr [8]byte
+	for {
+		if _, err := io.ReadFull(br, hdr[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		n := int64(binary.BigEndian.Uint32(hdr[4:]))
+		dst := io.Discard
+		switch hdr[0] {
+		case 1:
+			if stdout != nil {
+				dst = stdout
+			}
+		case 2:
+			dst = stderr
+		}
+		if _, err := io.CopyN(dst, br, n); err != nil {
+			return err
+		}
+	}
+}
+
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		t.buf = t.buf[len(t.buf)-t.max:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
+
+// CopyTo writes one file into a container (running or stopped) at dir/name.
+func (c *Client) CopyTo(ctx context.Context, id, dir, name string, content io.Reader, size int64, mode int64) error {
+	pr, pw := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(pw)
+		err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg})
+		if err == nil {
+			_, err = io.Copy(tw, content)
+		}
+		if err == nil {
+			err = tw.Close()
+		}
+		_ = pw.CloseWithError(err)
+	}()
+	p, err := c.prefix(ctx)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		p+"/containers/"+url.PathEscape(id)+"/archive?"+url.Values{"path": {dir}}.Encode(), pr)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return fmt.Errorf("docker: copy to container: %s: %s", res.Status, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// CopyFrom streams one file out of a container into w.
+func (c *Client) CopyFrom(ctx context.Context, id, path string, w io.Writer) (int64, error) {
+	res, err := c.request(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/archive", url.Values{"path": {path}}, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	tr := tar.NewReader(res.Body)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return 0, fmt.Errorf("docker: copy from container: %w", err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			return io.Copy(w, tr) //nolint:gosec // archive from our own container; caller bounds the destination
+		}
+	}
 }

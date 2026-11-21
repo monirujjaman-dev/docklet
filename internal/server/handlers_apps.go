@@ -139,12 +139,22 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) erro
 		Name      string       `json:"name"`
 		CreatedAt int64        `json:"createdAt"`
 		Apps      []appSummary `json:"apps"`
+		Databases []dbSummary  `json:"databases"`
 	}
 	out := make([]projectDTO, 0, len(projects))
 	idx := map[int64]int{}
 	for _, p := range projects {
 		idx[p.ID] = len(out)
-		out = append(out, projectDTO{ID: p.ID, Name: p.Name, CreatedAt: p.CreatedAt, Apps: []appSummary{}})
+		out = append(out, projectDTO{ID: p.ID, Name: p.Name, CreatedAt: p.CreatedAt, Apps: []appSummary{}, Databases: []dbSummary{}})
+	}
+	dbs, err := s.st.Q.ListDatabases(ctx)
+	if err != nil {
+		return err
+	}
+	for _, d := range dbs {
+		if i, ok := idx[d.ProjectID]; ok {
+			out[i].Databases = append(out[i].Databases, toDBSummary(d))
+		}
 	}
 	for _, a := range all {
 		sum, err := s.summarize(ctx, a)
@@ -212,8 +222,12 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) err
 		if err != nil {
 			return err
 		}
-		if n > 0 {
-			return errf(http.StatusConflict, "delete the project's %d app(s) first", n)
+		nd, err := q.CountProjectDatabases(ctx, id)
+		if err != nil {
+			return err
+		}
+		if n+nd > 0 {
+			return errf(http.StatusConflict, "delete the project's apps and databases first (%d app(s), %d database(s))", n, nd)
 		}
 		if err := q.DeleteProject(ctx, id); err != nil {
 			return err
@@ -426,6 +440,9 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 	err = s.st.Tx(ctx, func(q *db.Queries) error {
 		if _, err := q.GetProject(ctx, projectID); err != nil {
 			return notFoundAs(err, "project")
+		}
+		if err := nameFreeInProject(ctx, q, projectID, name); err != nil {
+			return err
 		}
 		created, err = q.CreateApp(ctx, db.CreateAppParams{
 			ProjectID: projectID, Name: name, Image: app.Image, Port: app.Port, RestartPolicy: app.RestartPolicy,
