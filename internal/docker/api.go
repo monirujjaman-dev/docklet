@@ -210,6 +210,12 @@ type ContainerSpec struct {
 	// Publish maps container TCP ports to host ports (0.0.0.0). Empty keeps
 	// the container reachable only on its Docker network.
 	Publish map[int]int
+
+	// Host helper containers (see internal/host).
+	Entrypoint []string
+	Privileged bool
+	PidMode    string   // "host" shares the host's PID namespace
+	Binds      []string // host paths, "src:dst[:ro]"
 }
 
 // ContainerCreate creates (but does not start) a container.
@@ -239,6 +245,15 @@ func (c *Client) ContainerCreate(ctx context.Context, s ContainerSpec) (string, 
 		}
 		host["Mounts"] = mounts
 	}
+	if s.Privileged {
+		host["Privileged"] = true
+	}
+	if s.PidMode != "" {
+		host["PidMode"] = s.PidMode
+	}
+	if len(s.Binds) > 0 {
+		host["Binds"] = s.Binds
+	}
 	if len(s.Publish) > 0 {
 		bindings := map[string]any{}
 		for cport, hport := range s.Publish {
@@ -261,6 +276,12 @@ func (c *Client) ContainerCreate(ctx context.Context, s ContainerSpec) (string, 
 				s.Network: map[string]any{"Aliases": s.Aliases},
 			},
 		},
+	}
+	if s.Entrypoint != nil {
+		body["Entrypoint"] = s.Entrypoint
+	}
+	if s.Network == "host" || s.Network == "none" {
+		delete(body, "NetworkingConfig") // aliases only apply to user-defined networks
 	}
 	var out struct {
 		ID string `json:"Id"`
@@ -318,6 +339,7 @@ func (c *Client) ContainerRemove(ctx context.Context, id string) error {
 type ContainerInfo struct {
 	ID    string `json:"Id"`
 	Name  string `json:"Name"`
+	Image string `json:"Image"` // image ID
 	State struct {
 		Status     string `json:"Status"` // created, running, paused, restarting, removing, exited, dead
 		Running    bool   `json:"Running"`
@@ -352,10 +374,18 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerInfo
 
 // ContainerSummary is an entry from container list.
 type ContainerSummary struct {
-	ID     string            `json:"Id"`
-	Names  []string          `json:"Names"`
-	Labels map[string]string `json:"Labels"`
-	State  string            `json:"State"`
+	ID      string            `json:"Id"`
+	Names   []string          `json:"Names"`
+	Labels  map[string]string `json:"Labels"`
+	State   string            `json:"State"`
+	Image   string            `json:"Image"`
+	ImageID string            `json:"ImageID"`
+	Ports   []struct {
+		IP          string `json:"IP"`
+		PrivatePort int    `json:"PrivatePort"`
+		PublicPort  int    `json:"PublicPort"`
+		Type        string `json:"Type"`
+	} `json:"Ports"`
 }
 
 // ContainerList lists all containers (running or not) having every label.
@@ -366,7 +396,11 @@ func (c *Client) ContainerList(ctx context.Context, labels map[string]string) ([
 	}
 	filters, _ := json.Marshal(map[string][]string{"label": f})
 	var out []ContainerSummary
-	err := c.do(ctx, http.MethodGet, "/containers/json", url.Values{"all": {"1"}, "filters": {string(filters)}}, nil, &out)
+	q := url.Values{"all": {"1"}}
+	if len(f) > 0 {
+		q.Set("filters", string(filters))
+	}
+	err := c.do(ctx, http.MethodGet, "/containers/json", q, nil, &out)
 	return out, err
 }
 

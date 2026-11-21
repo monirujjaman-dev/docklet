@@ -9,6 +9,7 @@
   import Account from "./pages/Account.svelte";
   import Settings from "./pages/Settings.svelte";
   import Monitoring from "./pages/Monitoring.svelte";
+  import Server from "./pages/Server.svelte";
   import NewApp from "./pages/NewApp.svelte";
   import AppDetail from "./pages/AppDetail.svelte";
   import NewDatabase from "./pages/NewDatabase.svelte";
@@ -17,6 +18,7 @@
   const nav = [
     { href: "/", label: "Projects" },
     { href: "/monitoring", label: "Monitoring" },
+    { href: "/server", label: "Server" },
     { href: "/audit", label: "Audit log" },
     { href: "/settings", label: "Settings" },
     { href: "/account", label: "Account" },
@@ -78,6 +80,8 @@
         {#key appRoute.id}<AppDetail appId={appRoute.id} />{/key}
       {:else if router.path.startsWith("/monitoring")}
         <Monitoring />
+      {:else if router.path.startsWith("/server")}
+        <Server />
       {:else if router.path.startsWith("/audit")}
         <Audit />
       {:else if router.path.startsWith("/settings")}

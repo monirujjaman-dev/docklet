@@ -117,16 +117,29 @@ func (f *Fake) ImageInspect(_ context.Context, ref string) (docker.Image, error)
 func (f *Fake) ImageRemove(_ context.Context, ref string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	refs := []string{ref}
 	img, ok := f.images[ref]
-	if !ok {
-		return nil
-	}
-	for _, c := range f.containers {
-		if c.Spec.Image == ref || c.Spec.Image == img.ID {
-			return docker.ErrConflict
+	if !ok { // by image ID: every tag of it
+		refs = nil
+		for r, im := range f.images {
+			if im.ID == ref {
+				refs, img, ok = append(refs, r), im, true
+			}
+		}
+		if !ok {
+			return nil
 		}
 	}
-	delete(f.images, ref)
+	for _, c := range f.containers {
+		for _, r := range refs {
+			if c.Spec.Image == r || c.Spec.Image == img.ID {
+				return docker.ErrConflict
+			}
+		}
+	}
+	for _, r := range refs {
+		delete(f.images, r)
+	}
 	return nil
 }
 
@@ -477,3 +490,41 @@ func (f *Fake) CopyFrom(_ context.Context, id, path string, w io.Writer) (int64,
 	n, err := w.Write(b)
 	return int64(n), err
 }
+
+// DiskUsage reports the fake's images (with container counts), containers
+// and volumes.
+func (f *Fake) DiskUsage(context.Context) (docker.DiskUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var du docker.DiskUsage
+	uses := map[string]int64{}
+	for _, c := range f.containers {
+		if img, ok := f.images[c.Spec.Image]; ok {
+			uses[img.ID]++
+		}
+	}
+	for ref, img := range f.images {
+		du.Images = append(du.Images, struct {
+			ID         string   `json:"Id"`
+			RepoTags   []string `json:"RepoTags"`
+			Size       int64    `json:"Size"`
+			SharedSize int64    `json:"SharedSize"`
+			Containers int64    `json:"Containers"`
+			Created    int64    `json:"Created"`
+		}{ID: img.ID, RepoTags: []string{ref}, Size: 10 << 20, Containers: uses[img.ID]})
+	}
+	for name := range f.volumes {
+		du.Volumes = append(du.Volumes, struct {
+			Name      string            `json:"Name"`
+			Labels    map[string]string `json:"Labels"`
+			UsageData struct {
+				Size     int64 `json:"Size"`
+				RefCount int64 `json:"RefCount"`
+			} `json:"UsageData"`
+		}{Name: name})
+	}
+	return du, nil
+}
+
+// BuildPrune pretends to remove the build cache.
+func (f *Fake) BuildPrune(context.Context) (int64, error) { return 0, nil }

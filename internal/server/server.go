@@ -77,6 +77,7 @@ type Server struct {
 	updates  *updateChecker
 	dests    *destinations.Service
 	sbRunner selfBackupRunner
+	host     hostState
 	sbEvery  time.Duration
 	cronTune func(*cron.Service)
 	apps     *apps.Service
@@ -263,6 +264,21 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/rollback", authed(s.handleRollback))
 	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
+	mux.HandleFunc("GET /api/server/overview", authed(s.handleServerOverview))
+	mux.HandleFunc("GET /api/server/timezones", authed(s.handleServerTimezones))
+	mux.HandleFunc("PUT /api/server/hostname", authed(s.handleServerHostname))
+	mux.HandleFunc("PUT /api/server/timezone", authed(s.handleServerTimezone))
+	mux.HandleFunc("PUT /api/server/swap", authed(s.handleServerSwap))
+	mux.HandleFunc("PUT /api/server/swappiness", authed(s.handleServerSwappiness))
+	mux.HandleFunc("POST /api/server/reboot", authed(s.handleServerReboot))
+	mux.HandleFunc("GET /api/server/ports", authed(s.handleServerPorts))
+	mux.HandleFunc("GET /api/server/processes", authed(s.handleServerProcesses))
+	mux.HandleFunc("POST /api/server/processes/{pid}/signal", authed(s.handleServerSignal))
+	mux.HandleFunc("GET /api/server/services", authed(s.handleServerServices))
+	mux.HandleFunc("POST /api/server/services/{unit}/{action}", authed(s.handleServerServiceAction))
+	mux.HandleFunc("GET /api/server/services/{unit}/logs", authed(s.handleServerServiceLogs))
+	mux.HandleFunc("GET /api/server/cleanup", authed(s.handleServerCleanupPreview))
+	mux.HandleFunc("POST /api/server/cleanup", authed(s.handleServerCleanup))
 	mux.HandleFunc("POST /api/system/backup", authed(s.handleSystemBackup))
 	mux.HandleFunc("GET /api/system/backup-schedule", authed(s.handleGetSelfBackupSchedule))
 	mux.HandleFunc("PUT /api/system/backup-schedule", authed(s.handlePutSelfBackupSchedule))

@@ -96,6 +96,15 @@ const (
 	ActionSelfBackupUploaded = "system.backup_uploaded"
 	ActionSelfBackupFailed   = "system.backup_upload_failed"
 
+	ActionServerHostname   = "server.hostname_changed"
+	ActionServerTimezone   = "server.timezone_changed"
+	ActionServerSwap       = "server.swap_changed"
+	ActionServerSwappiness = "server.swappiness_changed"
+	ActionServerReboot     = "server.reboot_requested"
+	ActionServerSignal     = "server.process_signalled"
+	ActionServerService    = "server.service_action"
+	ActionServerCleanup    = "server.disk_cleanup"
+
 	ActionCronCreated      = "cron.created"
 	ActionCronUpdated      = "cron.updated"
 	ActionCronDeleted      = "cron.deleted"
