@@ -15,6 +15,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/caddy"
+	"github.com/monirujjaman-dev/docklet/internal/cron"
 	"github.com/monirujjaman-dev/docklet/internal/databases"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
@@ -63,6 +64,8 @@ type Server struct {
 	appsTune func(*apps.Service)
 	dbs      *databases.Service
 	dbsTune  func(*databases.Service)
+	cron     *cron.Service
+	cronTune func(*cron.Service)
 	apps     *apps.Service
 	metrics  *metrics.Collector
 
@@ -103,6 +106,11 @@ func WithAppsTuning(fn func(*apps.Service)) Option { return func(s *Server) { s.
 // WithDatabasesTuning adjusts the databases service (tests).
 func WithDatabasesTuning(fn func(*databases.Service)) Option {
 	return func(s *Server) { s.dbsTune = fn }
+}
+
+// WithCronTuning adjusts the cron service (tests).
+func WithCronTuning(fn func(*cron.Service)) Option {
+	return func(s *Server) { s.cronTune = fn }
 }
 
 // WithMetrics enables the monitoring endpoints and runs the collector.
@@ -150,6 +158,15 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 			s.dbs.SealEnv = s.apps.SealEnv
 			if s.dbsTune != nil {
 				s.dbsTune(s.dbs)
+			}
+		}
+		if dk, ok := s.docker.(cron.Docker); ok {
+			s.cron = cron.New(st, dk, log)
+			s.cron.SetClock(s.now)
+			s.cron.EnvFor = s.apps.EnvFor
+			s.cron.EnsureNetwork = s.apps.EnsureNetwork
+			if s.cronTune != nil {
+				s.cronTune(s.cron)
 			}
 		}
 	}
@@ -221,6 +238,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/rollback", authed(s.handleRollback))
 	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
+	mux.HandleFunc("GET /api/apps/{id}/cron", authed(s.handleListCron))
+	mux.HandleFunc("POST /api/apps/{id}/cron", authed(s.handleCreateCron))
+	mux.HandleFunc("POST /api/cron/preview", authed(s.handleCronPreview))
+	mux.HandleFunc("PATCH /api/cron/{id}", authed(s.handleUpdateCron))
+	mux.HandleFunc("DELETE /api/cron/{id}", authed(s.handleDeleteCron))
+	mux.HandleFunc("POST /api/cron/{id}/run", authed(s.handleRunCron))
+	mux.HandleFunc("GET /api/cron/{id}/runs", authed(s.handleListCronRuns))
+	mux.HandleFunc("GET /api/cron-runs/{id}", authed(s.handleGetCronRun))
+	mux.HandleFunc("POST /api/cron-runs/{id}/cancel", authed(s.handleCancelCronRun))
 	mux.HandleFunc("GET /api/databases/engines", authed(s.handleEngines))
 	mux.HandleFunc("POST /api/projects/{id}/databases", authed(s.handleCreateDatabase))
 	mux.HandleFunc("GET /api/databases/{id}", authed(s.handleGetDatabase))
@@ -287,6 +313,12 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.dbs != nil {
 		go s.dbs.Run(ctx)
 	}
+	cronDone := make(chan struct{})
+	if s.cron != nil {
+		go func() { s.cron.Run(ctx); close(cronDone) }()
+	} else {
+		close(cronDone)
+	}
 	metricsDone := make(chan struct{})
 	if s.metrics != nil {
 		go func() { s.metrics.Run(ctx); close(metricsDone) }()
@@ -298,6 +330,13 @@ func (s *Server) Run(ctx context.Context) error {
 		select {
 		case <-metricsDone:
 		case <-time.After(5 * time.Second):
+		}
+	}()
+	// Cron runs stop their containers and record the outcome.
+	defer func() {
+		select {
+		case <-cronDone:
+		case <-time.After(15 * time.Second):
 		}
 	}()
 

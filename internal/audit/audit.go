@@ -79,6 +79,12 @@ const (
 	ActionRestoreRequested   = "database.restore_requested"
 	ActionRestoreSucceeded   = "database.restore_succeeded"
 	ActionRestoreFailed      = "database.restore_failed"
+
+	ActionCronCreated      = "cron.created"
+	ActionCronUpdated      = "cron.updated"
+	ActionCronDeleted      = "cron.deleted"
+	ActionCronRunRequested = "cron.run_requested"
+	ActionCronRunCancelled = "cron.run_cancelled"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

@@ -212,6 +212,9 @@ func (s *Service) observe(ctx context.Context, app db.App) (bool, error) {
 				return false, err
 			case info.State.Running:
 				status = "running"
+				if info.RestartCount > 0 {
+					msg = fmt.Sprintf("Restarted %d time(s) by the %q restart policy after exiting", info.RestartCount, app.RestartPolicy)
+				}
 				if ip := info.IP(NetworkName(app.ProjectID)); ip != "" && ip != dep.ContainerIp {
 					if err := s.st.Q.SetDeploymentIP(ctx, db.SetDeploymentIPParams{ContainerIp: ip, ID: dep.ID}); err != nil {
 						return false, err

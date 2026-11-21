@@ -13,6 +13,8 @@
     exited: "bg-red-950 text-red-300",
     missing: "bg-red-950 text-red-300",
     failed: "bg-red-950 text-red-300",
+    timeout: "bg-red-950 text-red-300",
+    skipped: "bg-neutral-900 text-neutral-400",
   };
   const label = $derived(status.replace("_", " "));
 </script>

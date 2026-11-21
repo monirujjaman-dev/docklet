@@ -105,7 +105,8 @@
                 <span class="font-medium w-40 truncate">{a.name}</span>
                 <StatusBadge status={a.runtimeStatus} />
                 <span class="text-xs text-neutral-500 font-mono truncate flex-1">{a.image}</span>
-                <span class="text-xs text-neutral-400 truncate">{a.domains.join(", ")}</span>
+                {#if a.kind === "worker"}<span class="text-xs text-neutral-500">worker</span>
+                {:else}<span class="text-xs text-neutral-400 truncate">{a.domains.join(", ")}</span>{/if}
               </button>
             </li>
           {/each}

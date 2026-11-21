@@ -81,8 +81,15 @@ func setup(t *testing.T, image string) *env {
 // deploy enqueues and runs one deployment synchronously.
 func (e *env) deploy(t *testing.T, image string) (db.Deployment, error) {
 	t.Helper()
+	return e.deployAs(t, image, KindWeb, "")
+}
+
+func (e *env) deployAs(t *testing.T, image, kind, command string) (db.Deployment, error) {
+	t.Helper()
 	ctx := context.Background()
-	if err := e.st.Q.UpdateAppConfig(ctx, db.UpdateAppConfigParams{Image: image, RestartPolicy: "unless-stopped", MemoryMb: 64, UpdatedAt: 2, ID: e.app.ID}); err != nil {
+	if err := e.st.Q.UpdateAppConfig(ctx, db.UpdateAppConfigParams{
+		Image: image, RestartPolicy: "unless-stopped", MemoryMb: 64, Kind: kind, Command: command, UpdatedAt: 2, ID: e.app.ID,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	app, _ := e.st.Q.GetApp(ctx, e.app.ID)
@@ -478,5 +485,71 @@ func TestGitDeployWithoutBuilder(t *testing.T) {
 	dep, err := e.deployCurrent(t)
 	if err == nil || !strings.Contains(dep.Error, "builds are not available") {
 		t.Fatalf("%v %q", err, dep.Error)
+	}
+}
+
+func TestWorkerDeploysWithoutPort(t *testing.T) {
+	e := setup(t, "hello:v1")
+	e.svc.WorkerSettle = 30 * time.Millisecond
+	checks := 0
+	e.svc.HealthCheck = func(context.Context, string, int) error { checks++; return nil }
+	dep, err := e.deployAs(t, "hello:v1", KindWorker, `node worker.js --queue "emails high"`)
+	if err != nil {
+		t.Fatalf("deploy: %v\n%s", err, dep.Log)
+	}
+	if dep.Port != 0 || checks != 0 {
+		t.Fatalf("worker got port %d / %d TCP checks", dep.Port, checks)
+	}
+	run := e.dk.Running()
+	if len(run) != 1 || strings.Join(run[0].Spec.Cmd, "|") != "node|worker.js|--queue|emails high" || run[0].Spec.Port != 0 {
+		t.Fatalf("spec = %+v", run[0].Spec)
+	}
+	if !strings.Contains(dep.Log, "Worker is running") {
+		t.Fatalf("log:\n%s", dep.Log)
+	}
+
+	// A crash is handled by Docker's restart policy and shown in the status.
+	e.dk.Crash(dep.ContainerID, 1)
+	if err := e.svc.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app := e.current(t)
+	if app.RuntimeStatus != "running" || !strings.Contains(app.RuntimeMessage, "Restarted 1 time(s)") {
+		t.Fatalf("status = %s %q", app.RuntimeStatus, app.RuntimeMessage)
+	}
+}
+
+func TestWorkerThatExitsFailsDeploy(t *testing.T) {
+	e := setup(t, "hello:v1")
+	e.svc.WorkerSettle = time.Second
+	e.dk.SetRun(func(s docker.ContainerSpec) (dockertest.RunResult, bool) {
+		return dockertest.RunResult{Exit: 2, Duration: 20 * time.Millisecond, Logs: []string{"missing QUEUE_URL"}}, true
+	})
+	dep, err := e.deployAs(t, "hello:v1", KindWorker, "")
+	if err == nil || !strings.Contains(err.Error(), "exited with code 2") {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(dep.Log, "missing QUEUE_URL") {
+		t.Fatalf("log lacks container output:\n%s", dep.Log)
+	}
+}
+
+func TestSplitCommand(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                            "",
+		"  php artisan   queue:work ": "php|artisan|queue:work",
+		`sh -c 'echo $HOME && date'`:  "sh|-c|echo $HOME && date",
+		`echo "a \"b\" c" d\ e`:       `echo|a "b" c|d e`,
+		`python -m app.jobs --n=""`:   "python|-m|app.jobs|--n=",
+	} {
+		got, err := SplitCommand(in)
+		if err != nil || strings.Join(got, "|") != want {
+			t.Errorf("SplitCommand(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{`echo 'x`, `echo "x`, `echo \`} {
+		if _, err := SplitCommand(bad); err == nil {
+			t.Errorf("SplitCommand(%q) accepted", bad)
+		}
 	}
 }

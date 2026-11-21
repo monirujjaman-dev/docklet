@@ -6,11 +6,12 @@
   import StatusBadge from "../lib/StatusBadge.svelte";
   import MetricsPanel from "../lib/MetricsPanel.svelte";
   import GitSource from "../lib/GitSource.svelte";
+  import CronJobs from "../lib/CronJobs.svelte";
 
   let { appId }: { appId: string } = $props();
 
   let app = $state<AppDetail | null>(null);
-  let tab = $state<"overview" | "metrics" | "env" | "deployments" | "logs">("overview");
+  let tab = $state<"overview" | "metrics" | "env" | "deployments" | "cron" | "logs">("overview");
   let error = $state("");
   let busy = $state("");
 
@@ -53,7 +54,7 @@
   }
 
   // --- Overview: config and domains ---
-  let cfg = $state({ image: "", port: "", memoryMb: "", cpus: "", restartPolicy: "unless-stopped" });
+  let cfg = $state({ image: "", port: "", memoryMb: "", cpus: "", restartPolicy: "unless-stopped", command: "", kind: "web" as "web" | "worker" });
   let domainsText = $state("");
   let saveMsg = $state("");
 
@@ -64,6 +65,8 @@
       memoryMb: a.memoryMb ? String(a.memoryMb) : "",
       cpus: a.cpuMillis ? String(a.cpuMillis / 1000) : "",
       restartPolicy: a.restartPolicy,
+      command: a.command,
+      kind: a.kind,
     };
     domainsText = a.domains.join(", ");
   }
@@ -79,6 +82,8 @@
           memoryMb: cfg.memoryMb ? Number(cfg.memoryMb) : 0,
           cpuMillis: cfg.cpus ? Math.round(Number(cfg.cpus) * 1000) : 0,
           restartPolicy: cfg.restartPolicy,
+          command: cfg.command.trim(),
+          kind: cfg.kind,
         },
       });
       if (deploy) await action("deploy");
@@ -210,6 +215,7 @@
     ["metrics", "Metrics"],
     ["env", "Environment"],
     ["deployments", "Deployments"],
+    ["cron", "Cron jobs"],
     ["logs", "Logs"],
   ] as const;
 </script>
@@ -223,6 +229,7 @@
       <h1 class="text-xl font-semibold flex items-center gap-3">
         {app.name}
         <StatusBadge status={app.runtimeStatus} />
+        {#if app.kind === "worker"}<span class="text-xs rounded-full px-2 py-0.5 bg-neutral-800 text-neutral-300">worker</span>{/if}
         {#if inProgress}<StatusBadge status="pending" />{/if}
       </h1>
       {#if app.sourceType === "git" && app.git}
@@ -266,6 +273,17 @@
 
   {#if tab === "overview"}
     <div class="grid gap-8 md:grid-cols-2 max-w-5xl">
+      {#if app.kind === "worker"}
+      <section class="space-y-3">
+        <h2 class="font-medium">Background worker</h2>
+        <p class="text-sm text-neutral-400">
+          Workers have no domains and no route through Caddy. Docker restarts the container when it exits, per the
+          <strong>{app.restartPolicy}</strong> restart policy.
+          {#if app.port}Apps in {app.projectName} reach it at <span class="font-mono">{app.name}:{app.port}</span>.{/if}
+        </p>
+        {#if app.command}<p class="text-sm">Command: <span class="font-mono text-neutral-300">{app.command}</span></p>{/if}
+      </section>
+      {:else}
       <section class="space-y-3">
         <h2 class="font-medium">Domains</h2>
         <input
@@ -277,7 +295,9 @@
         {#each app.domains as d}
           <p class="text-sm"><a class="text-emerald-300 hover:underline" href="https://{d}" target="_blank" rel="noreferrer">https://{d}</a></p>
         {/each}
+        <p class="text-xs text-neutral-500">Restart policy: {app.restartPolicy}</p>
       </section>
+      {/if}
 
       <section class="space-y-3">
         <h2 class="font-medium">Configuration</h2>
@@ -286,8 +306,14 @@
             <label class="col-span-2">Image
               <input bind:value={cfg.image} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 font-mono" /></label>
           {/if}
-          <label>Port
-            <input bind:value={cfg.port} placeholder="auto" class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2" /></label>
+          <label>Type
+            <select bind:value={cfg.kind} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2">
+              <option value="web">Web service</option><option value="worker">Background worker</option>
+            </select></label>
+          <label>{cfg.kind === "worker" ? "Internal port" : "Port"}
+            <input bind:value={cfg.port} placeholder={cfg.kind === "worker" ? "none" : "auto"} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2" /></label>
+          <label class="col-span-2">Command
+            <input bind:value={cfg.command} placeholder="image default" class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2 font-mono" /></label>
           <label>Restart
             <select bind:value={cfg.restartPolicy} class="mt-1 w-full rounded-md bg-neutral-900 border border-neutral-700 px-3 py-2">
               <option>unless-stopped</option><option>always</option><option>on-failure</option><option>no</option>
@@ -374,6 +400,8 @@
         {/if}
       </div>
     </div>
+  {:else if tab === "cron"}
+    <CronJobs appId={app.id} deployed={app.deployments.some((d) => d.current)} />
   {:else if tab === "logs"}
     <div class="flex items-center justify-between mb-2 text-sm">
       <label class="flex items-center gap-2 text-neutral-400"><input type="checkbox" bind:checked={follow} /> Follow</label>
