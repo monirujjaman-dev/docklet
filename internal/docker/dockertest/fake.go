@@ -10,17 +10,21 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 )
 
 // Container is a fake container.
 type Container struct {
-	files   map[string][]byte
-	Spec    docker.ContainerSpec
-	running bool
-	ip      string
-	exit    int
+	files    map[string][]byte
+	Spec     docker.ContainerSpec
+	running  bool
+	ip       string
+	exit     int
+	logs     []string
+	restarts int
+	done     chan struct{} // closed when a RunFunc container exits
 }
 
 // Fake is an in-memory Docker for tests. Images whose name contains "crash" exit
@@ -33,7 +37,44 @@ type Fake struct {
 	attached   map[string]bool
 	volumes    map[string]map[string][]byte
 	exec       ExecFunc
+	run        RunFunc
 	seq        int
+}
+
+// RunResult describes how a container started under a RunFunc behaves.
+type RunResult struct {
+	Exit     int
+	Logs     []string
+	Duration time.Duration // how long it runs before exiting
+	Forever  bool          // runs until stopped
+}
+
+// RunFunc decides the behaviour of a starting container; ok=false keeps the
+// default (a long-running server).
+type RunFunc func(spec docker.ContainerSpec) (r RunResult, ok bool)
+
+// SetRun installs container run emulation (one-off jobs, crashing workers).
+func (f *Fake) SetRun(fn RunFunc) {
+	f.mu.Lock()
+	f.run = fn
+	f.mu.Unlock()
+}
+
+// Crash makes a running container exit with code and, like Docker's restart
+// policy, restart it unless the policy is "no".
+func (f *Fake) Crash(id string, code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, err := f.get(id)
+	if err != nil {
+		return
+	}
+	if c.Spec.RestartPolicy == "no" || c.Spec.RestartPolicy == "" {
+		c.running, c.exit = false, code
+		return
+	}
+	c.exit = code
+	c.restarts++
 }
 
 func New() *Fake {
@@ -164,7 +205,47 @@ func (f *Fake) ContainerStart(_ context.Context, id string) error {
 	}
 	c.running = true
 	c.ip = fmt.Sprintf("10.0.0.%d", f.seq)
+	if f.run != nil {
+		if r, ok := f.run(c.Spec); ok {
+			c.logs, c.done = r.Logs, make(chan struct{})
+			if !r.Forever {
+				done := c.done
+				go func() {
+					time.Sleep(r.Duration)
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					if c.running {
+						c.running, c.exit = false, r.Exit
+						close(done)
+					}
+				}()
+			}
+		}
+	}
 	return nil
+}
+
+// ContainerWait implements the wait endpoint (condition not-running).
+func (f *Fake) ContainerWait(ctx context.Context, id string) (int, error) {
+	for {
+		f.mu.Lock()
+		c, err := f.get(id)
+		if err != nil {
+			f.mu.Unlock()
+			return 0, err
+		}
+		if !c.running {
+			code := c.exit
+			f.mu.Unlock()
+			return code, nil
+		}
+		f.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 func (f *Fake) ContainerStop(_ context.Context, id string, _ int) error {
 	f.mu.Lock()
@@ -172,6 +253,11 @@ func (f *Fake) ContainerStop(_ context.Context, id string, _ int) error {
 	c, err := f.get(id)
 	if err != nil {
 		return err
+	}
+	if c.running && c.done != nil {
+		c.exit = 137
+		close(c.done)
+		c.done = nil
 	}
 	c.running = false
 	return nil
@@ -200,6 +286,7 @@ func (f *Fake) ContainerInspect(_ context.Context, id string) (docker.ContainerI
 	info.ID = id
 	info.State.Running = c.running
 	info.State.ExitCode = c.exit
+	info.RestartCount = c.restarts
 	info.NetworkSettings.Networks = map[string]struct {
 		IPAddress string `json:"IPAddress"`
 	}{c.Spec.Network: {IPAddress: c.ip}}
@@ -220,8 +307,22 @@ outer:
 	}
 	return out, nil
 }
-func (f *Fake) ContainerLogs(_ context.Context, _ string, _ docker.LogOptions, fn func(docker.LogLine) error) error {
-	return fn(docker.LogLine{Stream: "stderr", Text: "boom: config missing"})
+func (f *Fake) ContainerLogs(_ context.Context, id string, _ docker.LogOptions, fn func(docker.LogLine) error) error {
+	f.mu.Lock()
+	var lines []string
+	if c, err := f.get(id); err == nil {
+		lines = append(lines, c.logs...)
+	}
+	f.mu.Unlock()
+	if lines == nil {
+		return fn(docker.LogLine{Stream: "stderr", Text: "boom: config missing"})
+	}
+	for _, l := range lines {
+		if err := fn(docker.LogLine{Stream: "stdout", Text: l}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (f *Fake) Running() []*Container {
 	f.mu.Lock()

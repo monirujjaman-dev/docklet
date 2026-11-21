@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // cron time zones work without zoneinfo on the host
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/build"

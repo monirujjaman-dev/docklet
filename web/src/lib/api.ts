@@ -89,6 +89,7 @@ export type AppSummary = {
   runtimeStatus: string;
   runtimeMessage?: string;
   domains: string[];
+  kind: "web" | "worker";
 };
 
 export type Project = { id: number; name: string; createdAt: number; apps: AppSummary[]; databases: DbSummary[] };
@@ -128,6 +129,7 @@ export type AppDetail = AppSummary & {
   projectName: string;
   port: number;
   restartPolicy: string;
+  command: string;
   cpuMillis: number;
   memoryMb: number;
   env: { key: string; updatedAt: number }[];
@@ -179,3 +181,29 @@ export type DatabaseDetail = DbSummary & {
 };
 
 export type EngineInfo = { name: string; label: string; versions: string[]; port: number; envKey: string };
+
+export type CronRun = {
+  id: number;
+  trigger: "schedule" | "manual";
+  status: "running" | "succeeded" | "failed" | "timeout" | "skipped";
+  exitCode?: number;
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
+  durationMs: number;
+  logs?: string;
+};
+
+export type CronJob = {
+  id: number;
+  appId: number;
+  name: string;
+  schedule: string;
+  timezone: string;
+  command: string;
+  timeoutSec: number;
+  concurrency: "skip" | "allow";
+  enabled: boolean;
+  nextRunAt?: number;
+  lastRun?: CronRun;
+};

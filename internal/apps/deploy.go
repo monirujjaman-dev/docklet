@@ -240,8 +240,9 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 	if err != nil {
 		return "", fmt.Errorf("inspect image: %w", err)
 	}
+	worker := app.Kind == KindWorker
 	port := int(app.Port)
-	if port == 0 {
+	if port == 0 && !worker { // a worker only gets a port if one is set explicitly
 		port = img.FirstTCPPort()
 		if port == 0 {
 			return "", errors.New("the image exposes no TCP port; set the app's port")
@@ -258,6 +259,13 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 	if err != nil {
 		return "", err
 	}
+	var cmd []string
+	if strings.TrimSpace(app.Command) != "" {
+		if cmd, err = SplitCommand(app.Command); err != nil {
+			return "", fmt.Errorf("command: %w", err)
+		}
+		lg.printf("Command: %q", cmd)
+	}
 
 	// 3. Create and start. A leftover from an interrupted attempt is removed.
 	name := fmt.Sprintf("docklet-%s-%s-d%d", strings.ToLower(project.Name), strings.ToLower(app.Name), dep.ID)
@@ -266,6 +274,7 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 		Name: name, Image: image, Env: env, Hostname: strings.ToLower(app.Name), Port: port,
 		Network: network, Aliases: []string{strings.ToLower(app.Name)},
 		RestartPolicy: app.RestartPolicy,
+		Cmd:           cmd,
 		NanoCPUs:      app.CpuMillis * 1_000_000,
 		MemoryBytes:   app.MemoryMb << 20,
 		Labels: map[string]string{
@@ -273,7 +282,11 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 			LabelApp: fmt.Sprint(app.ID), LabelDeployment: fmt.Sprint(dep.ID),
 		},
 	}
-	lg.printf("Creating container %s (port %d, %d env vars)", name, port, len(env))
+	if port > 0 {
+		lg.printf("Creating container %s (port %d, %d env vars)", name, port, len(env))
+	} else {
+		lg.printf("Creating worker container %s (no port, %d env vars)", name, len(env))
+	}
 	id, err := s.dk.ContainerCreate(ctx, spec)
 	if err != nil {
 		return "", fmt.Errorf("create container: %w", err)
@@ -282,14 +295,25 @@ func (s *Service) deploySteps(ctx context.Context, lg *deployLog, project db.Pro
 		return id, fmt.Errorf("start container: %w", err)
 	}
 
-	// 4. Health check.
-	lg.printf("Waiting for port %d to accept connections (timeout %s)", port, s.HealthTimeout)
-	ip, err := s.waitHealthy(ctx, id, network, port)
+	// 4. Health check: a port that accepts connections, or for a worker
+	// without a port, a process that keeps running.
+	var ip string
+	if port > 0 {
+		lg.printf("Waiting for port %d to accept connections (timeout %s)", port, s.HealthTimeout)
+		ip, err = s.waitHealthy(ctx, id, network, port)
+	} else {
+		lg.printf("Checking that the worker keeps running for %s", s.WorkerSettle)
+		ip, err = s.waitSettled(ctx, id, network)
+	}
 	if err != nil {
 		s.appendContainerLogs(ctx, lg, id)
 		return id, err
 	}
-	lg.printf("Healthy at %s:%d", ip, port)
+	if port > 0 {
+		lg.printf("Healthy at %s:%d", ip, port)
+	} else {
+		lg.printf("Worker is running")
+	}
 
 	// 5. Switch traffic.
 	prev := app.CurrentDeploymentID
@@ -374,6 +398,32 @@ func (s *Service) waitHealthy(ctx context.Context, id, network string, port int)
 				lastErr = ctx.Err()
 			}
 			return "", fmt.Errorf("health check timed out: port %d never accepted connections (%w)", port, lastErr)
+		case <-time.After(s.HealthInterval):
+		}
+	}
+}
+
+// waitSettled succeeds once the container has run for WorkerSettle without
+// exiting or being restarted.
+func (s *Service) waitSettled(ctx context.Context, id, network string) (string, error) {
+	deadline := s.now().Add(s.WorkerSettle)
+	for {
+		info, err := s.dk.ContainerInspect(ctx, id)
+		if err != nil {
+			return "", fmt.Errorf("inspect container: %w", err)
+		}
+		if !info.State.Running && !info.State.Restarting {
+			return "", fmt.Errorf("worker exited with code %d %s", info.State.ExitCode, strings.TrimSpace(info.State.Error))
+		}
+		if info.RestartCount > 0 {
+			return "", fmt.Errorf("worker crashed and restarted %d time(s)", info.RestartCount)
+		}
+		if !s.now().Before(deadline) {
+			return info.IP(network), nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
 		case <-time.After(s.HealthInterval):
 		}
 	}

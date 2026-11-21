@@ -90,6 +90,7 @@ type Service struct {
 	Workers           int
 	HealthTimeout     time.Duration
 	HealthInterval    time.Duration
+	WorkerSettle      time.Duration // a worker without a port must keep running this long
 	DrainDelay        time.Duration
 	StopTimeoutSec    int
 	ReconcileInterval time.Duration
@@ -113,7 +114,7 @@ type Service struct {
 func New(st *store.Store, dk Docker, box *secrets.Box, log *slog.Logger, proxy Proxy) *Service {
 	return &Service{
 		st: st, dk: dk, box: box, log: log, proxy: proxy, now: time.Now,
-		Workers: 2, HealthTimeout: 60 * time.Second, HealthInterval: 500 * time.Millisecond,
+		Workers: 2, HealthTimeout: 60 * time.Second, HealthInterval: 500 * time.Millisecond, WorkerSettle: 5 * time.Second,
 		DrainDelay: 2 * time.Second, StopTimeoutSec: 10, ReconcileInterval: 30 * time.Second,
 		HealthCheck: tcpCheck, KeepImages: 5,
 		wake: make(chan struct{}, 1),
@@ -314,6 +315,11 @@ func (s *Service) syncProxy(ctx context.Context) error {
 		return nil
 	}
 	return s.proxy.Sync(ctx)
+}
+
+// EnvFor decrypts an app's environment (used by cron runs).
+func (s *Service) EnvFor(ctx context.Context, appID int64) ([]string, error) {
+	return s.envFor(ctx, appID)
 }
 
 // envFor decrypts an app's environment as KEY=VALUE pairs.

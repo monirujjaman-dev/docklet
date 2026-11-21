@@ -14,8 +14,8 @@ DELETE FROM projects WHERE id = ?;
 SELECT COUNT(*) FROM apps WHERE project_id = ?;
 
 -- name: CreateApp :one
-INSERT INTO apps (project_id, name, image, port, restart_policy, cpu_millis, memory_mb, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO apps (project_id, name, image, port, restart_policy, cpu_millis, memory_mb, kind, command, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: GetApp :one
@@ -28,7 +28,7 @@ SELECT * FROM apps ORDER BY project_id, name;
 SELECT * FROM apps WHERE project_id = ? ORDER BY name;
 
 -- name: UpdateAppConfig :exec
-UPDATE apps SET image = ?, port = ?, restart_policy = ?, cpu_millis = ?, memory_mb = ?, updated_at = ? WHERE id = ?;
+UPDATE apps SET image = ?, port = ?, restart_policy = ?, cpu_millis = ?, memory_mb = ?, kind = ?, command = ?, updated_at = ? WHERE id = ?;
 
 -- name: SetAppDesiredStatus :exec
 UPDATE apps SET desired_status = ?, updated_at = ? WHERE id = ?;

@@ -65,6 +65,7 @@ type appSummary struct {
 	RuntimeStatus  string   `json:"runtimeStatus"`
 	RuntimeMessage string   `json:"runtimeMessage,omitempty"`
 	Domains        []string `json:"domains"`
+	Kind           string   `json:"kind"`
 }
 
 type envEntry struct {
@@ -98,6 +99,7 @@ type appDetail struct {
 	ProjectName   string          `json:"projectName"`
 	Port          int64           `json:"port"`
 	RestartPolicy string          `json:"restartPolicy"`
+	Command       string          `json:"command"`
 	CPUMillis     int64           `json:"cpuMillis"`
 	MemoryMB      int64           `json:"memoryMb"`
 	Env           []envEntry      `json:"env"`
@@ -117,7 +119,7 @@ func (s *Server) summarize(ctx context.Context, a db.App) (appSummary, error) {
 	return appSummary{
 		ID: a.ID, ProjectID: a.ProjectID, Name: a.Name, Image: a.Image,
 		DesiredStatus: a.DesiredStatus, RuntimeStatus: a.RuntimeStatus, RuntimeMessage: a.RuntimeMessage,
-		Domains: domains,
+		Domains: domains, Kind: appKind(a),
 	}, nil
 }
 
@@ -253,6 +255,8 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) err
 // --- Apps ---
 
 type appConfigInput struct {
+	Kind          *string `json:"kind"`
+	Command       *string `json:"command"`
 	Image         *string `json:"image"`
 	Port          *int64  `json:"port"`
 	RestartPolicy *string `json:"restartPolicy"`
@@ -260,8 +264,31 @@ type appConfigInput struct {
 	MemoryMB      *int64  `json:"memoryMb"`
 }
 
+func appKind(a db.App) string {
+	if a.Kind == apps.KindWorker {
+		return apps.KindWorker
+	}
+	return apps.KindWeb
+}
+
 // apply validates and merges the input into app.
 func (in appConfigInput) apply(app *db.App) error {
+	if in.Kind != nil {
+		if *in.Kind != apps.KindWeb && *in.Kind != apps.KindWorker {
+			return errf(http.StatusBadRequest, "kind must be web or worker")
+		}
+		app.Kind = *in.Kind
+	}
+	if in.Command != nil {
+		c := strings.TrimSpace(*in.Command)
+		if len(c) > 4096 {
+			return errf(http.StatusBadRequest, "command is too long (max 4096 characters)")
+		}
+		if _, err := apps.SplitCommand(c); err != nil {
+			return errf(http.StatusBadRequest, "command: %v", err)
+		}
+		app.Command = c
+	}
 	if in.Image != nil {
 		img := strings.TrimSpace(*in.Image)
 		if !imageRefRe.MatchString(img) {
@@ -414,9 +441,12 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 	} else if in.Image == nil {
 		return errf(http.StatusBadRequest, "image (or git) is required")
 	}
-	app := db.App{RestartPolicy: "unless-stopped"}
+	app := db.App{RestartPolicy: "unless-stopped", Kind: apps.KindWeb}
 	if err := in.apply(&app); err != nil {
 		return err
+	}
+	if app.Kind == apps.KindWorker && len(in.Domains) > 0 {
+		return errf(http.StatusBadRequest, "a worker has no public route, so it can't have domains")
 	}
 	if err := validateEnv(in.Env); err != nil {
 		return err
@@ -446,7 +476,8 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 		}
 		created, err = q.CreateApp(ctx, db.CreateAppParams{
 			ProjectID: projectID, Name: name, Image: app.Image, Port: app.Port, RestartPolicy: app.RestartPolicy,
-			CpuMillis: app.CpuMillis, MemoryMb: app.MemoryMb, CreatedAt: now.Unix(), UpdatedAt: now.Unix(),
+			CpuMillis: app.CpuMillis, MemoryMb: app.MemoryMb, Kind: app.Kind, Command: app.Command,
+			CreatedAt: now.Unix(), UpdatedAt: now.Unix(),
 		})
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
@@ -473,7 +504,7 @@ func (s *Server) handleCreateApp(w http.ResponseWriter, r *http.Request) error {
 		if _, err := audit.Append(ctx, q, audit.Entry{
 			ActorID: ptr(a.User.ID), Actor: a.User.Username, Action: audit.ActionAppCreated,
 			Target: fmt.Sprintf("app:%d", created.ID), IP: clientIP(r),
-			Details: map[string]any{"name": name, "image": app.Image, "git": in.Git, "domains": domains, "envKeys": keys},
+			Details: map[string]any{"name": name, "kind": app.Kind, "image": app.Image, "git": in.Git, "domains": domains, "envKeys": keys},
 		}, now); err != nil {
 			return err
 		}
@@ -545,7 +576,7 @@ func (s *Server) handleGetApp(w http.ResponseWriter, r *http.Request) error {
 		})
 	}
 	detail := appDetail{
-		appSummary: sum, ProjectName: project.Name, Port: app.Port, RestartPolicy: app.RestartPolicy,
+		appSummary: sum, ProjectName: project.Name, Port: app.Port, RestartPolicy: app.RestartPolicy, Command: app.Command,
 		CPUMillis: app.CpuMillis, MemoryMB: app.MemoryMb, Env: env, Deployments: dd, CreatedAt: app.CreatedAt,
 		SourceType: app.SourceType, BuildsAvailable: s.apps != nil && s.apps.Builder != nil,
 	}
@@ -586,17 +617,31 @@ func (s *Server) handleUpdateApp(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return notFoundAs(err, "app")
 		}
+		app.Kind = appKind(app)
 		before := app
 		if err := in.apply(&app); err != nil {
 			return err
 		}
+		if app.Kind == apps.KindWorker && before.Kind != apps.KindWorker {
+			if domains, err := q.ListAppDomains(ctx, id); err != nil {
+				return err
+			} else if len(domains) > 0 {
+				return errf(http.StatusBadRequest, "remove the app's domains before turning it into a worker")
+			}
+		}
 		if err := q.UpdateAppConfig(ctx, db.UpdateAppConfigParams{
 			Image: app.Image, Port: app.Port, RestartPolicy: app.RestartPolicy, CpuMillis: app.CpuMillis,
-			MemoryMb: app.MemoryMb, UpdatedAt: s.now().Unix(), ID: id,
+			MemoryMb: app.MemoryMb, Kind: app.Kind, Command: app.Command, UpdatedAt: s.now().Unix(), ID: id,
 		}); err != nil {
 			return err
 		}
 		changes := map[string]any{}
+		if before.Kind != app.Kind {
+			changes["kind"] = []string{before.Kind, app.Kind}
+		}
+		if before.Command != app.Command {
+			changes["command"] = []string{before.Command, app.Command}
+		}
 		if before.Image != app.Image {
 			changes["image"] = []string{before.Image, app.Image}
 		}
@@ -695,8 +740,12 @@ func (s *Server) handleUpdateDomains(w http.ResponseWriter, r *http.Request) err
 	ctx := r.Context()
 	a := authFrom(ctx)
 	err = s.st.Tx(ctx, func(q *db.Queries) error {
-		if _, err := q.GetApp(ctx, id); err != nil {
+		app, err := q.GetApp(ctx, id)
+		if err != nil {
 			return notFoundAs(err, "app")
+		}
+		if app.Kind == apps.KindWorker && len(in.Domains) > 0 {
+			return errf(http.StatusBadRequest, "a worker has no public route, so it can't have domains")
 		}
 		before, err := q.ListAppDomains(ctx, id)
 		if err != nil {

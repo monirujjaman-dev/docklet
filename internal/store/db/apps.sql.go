@@ -45,9 +45,9 @@ func (q *Queries) CountProjectApps(ctx context.Context, projectID int64) (int64,
 }
 
 const createApp = `-- name: CreateApp :one
-INSERT INTO apps (project_id, name, image, port, restart_policy, cpu_millis, memory_mb, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy
+INSERT INTO apps (project_id, name, image, port, restart_policy, cpu_millis, memory_mb, kind, command, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy, kind, command
 `
 
 type CreateAppParams struct {
@@ -58,6 +58,8 @@ type CreateAppParams struct {
 	RestartPolicy string
 	CpuMillis     int64
 	MemoryMb      int64
+	Kind          string
+	Command       string
 	CreatedAt     int64
 	UpdatedAt     int64
 }
@@ -71,6 +73,8 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		arg.RestartPolicy,
 		arg.CpuMillis,
 		arg.MemoryMb,
+		arg.Kind,
+		arg.Command,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -100,6 +104,8 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.WebhookToken,
 		&i.WebhookSecretEnc,
 		&i.AutoDeploy,
+		&i.Kind,
+		&i.Command,
 	)
 	return i, err
 }
@@ -256,7 +262,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy FROM apps WHERE id = ?
+SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy, kind, command FROM apps WHERE id = ?
 `
 
 func (q *Queries) GetApp(ctx context.Context, id int64) (App, error) {
@@ -287,12 +293,14 @@ func (q *Queries) GetApp(ctx context.Context, id int64) (App, error) {
 		&i.WebhookToken,
 		&i.WebhookSecretEnc,
 		&i.AutoDeploy,
+		&i.Kind,
+		&i.Command,
 	)
 	return i, err
 }
 
 const getAppByWebhookToken = `-- name: GetAppByWebhookToken :one
-SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy FROM apps WHERE webhook_token = ?
+SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy, kind, command FROM apps WHERE webhook_token = ?
 `
 
 func (q *Queries) GetAppByWebhookToken(ctx context.Context, webhookToken sql.NullString) (App, error) {
@@ -323,6 +331,8 @@ func (q *Queries) GetAppByWebhookToken(ctx context.Context, webhookToken sql.Nul
 		&i.WebhookToken,
 		&i.WebhookSecretEnc,
 		&i.AutoDeploy,
+		&i.Kind,
+		&i.Command,
 	)
 	return i, err
 }
@@ -514,7 +524,7 @@ func (q *Queries) ListAppDomains(ctx context.Context, appID int64) ([]string, er
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy FROM apps ORDER BY project_id, name
+SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy, kind, command FROM apps ORDER BY project_id, name
 `
 
 func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
@@ -551,6 +561,8 @@ func (q *Queries) ListApps(ctx context.Context) ([]App, error) {
 			&i.WebhookToken,
 			&i.WebhookSecretEnc,
 			&i.AutoDeploy,
+			&i.Kind,
+			&i.Command,
 		); err != nil {
 			return nil, err
 		}
@@ -598,7 +610,7 @@ func (q *Queries) ListEnv(ctx context.Context, appID int64) ([]EnvVar, error) {
 }
 
 const listProjectApps = `-- name: ListProjectApps :many
-SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy FROM apps WHERE project_id = ? ORDER BY name
+SELECT id, project_id, name, image, port, restart_policy, cpu_millis, memory_mb, desired_status, runtime_status, runtime_message, current_deployment_id, created_at, updated_at, source_type, git_url, git_branch, build_context, dockerfile, deploy_key_enc, deploy_key_pub, webhook_token, webhook_secret_enc, auto_deploy, kind, command FROM apps WHERE project_id = ? ORDER BY name
 `
 
 func (q *Queries) ListProjectApps(ctx context.Context, projectID int64) ([]App, error) {
@@ -635,6 +647,8 @@ func (q *Queries) ListProjectApps(ctx context.Context, projectID int64) ([]App, 
 			&i.WebhookToken,
 			&i.WebhookSecretEnc,
 			&i.AutoDeploy,
+			&i.Kind,
+			&i.Command,
 		); err != nil {
 			return nil, err
 		}
@@ -986,7 +1000,7 @@ func (q *Queries) StartDeployment(ctx context.Context, arg StartDeploymentParams
 }
 
 const updateAppConfig = `-- name: UpdateAppConfig :exec
-UPDATE apps SET image = ?, port = ?, restart_policy = ?, cpu_millis = ?, memory_mb = ?, updated_at = ? WHERE id = ?
+UPDATE apps SET image = ?, port = ?, restart_policy = ?, cpu_millis = ?, memory_mb = ?, kind = ?, command = ?, updated_at = ? WHERE id = ?
 `
 
 type UpdateAppConfigParams struct {
@@ -995,6 +1009,8 @@ type UpdateAppConfigParams struct {
 	RestartPolicy string
 	CpuMillis     int64
 	MemoryMb      int64
+	Kind          string
+	Command       string
 	UpdatedAt     int64
 	ID            int64
 }
@@ -1006,6 +1022,8 @@ func (q *Queries) UpdateAppConfig(ctx context.Context, arg UpdateAppConfigParams
 		arg.RestartPolicy,
 		arg.CpuMillis,
 		arg.MemoryMb,
+		arg.Kind,
+		arg.Command,
 		arg.UpdatedAt,
 		arg.ID,
 	)

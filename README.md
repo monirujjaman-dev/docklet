@@ -100,6 +100,25 @@ Builds without a Dockerfile (Railpack) are not supported yet.
 
 A database name is unique per project, across both apps and databases, since both are DNS names on the same network. Deleting a database keeps its volume and backups unless you choose to delete the data too.
 
+### Workers and cron jobs
+
+An app is either a **web service** (gets domains and HTTPS through Caddy) or a **background worker**:
+
+- **No route.** A worker has no domains and never appears in Caddy. Deploy succeeds once the process has kept running for 5 s. If you set an internal port, deploy instead waits until it accepts TCP connections.
+- **Service discovery.** Other apps in the project reach it by name (e.g. `jobs:9000`), the same way they reach any app or database there.
+- **Crashes.** Docker restarts the container per its restart policy (`unless-stopped` by default). The app page shows the policy and how often the container has been restarted.
+- **Command.** Either kind can override the image's CMD with a command such as `php artisan queue:work`. The command is split like a shell would split it, but runs without a shell; use `sh -c '…'` for pipes, `&&` or `$VARS`.
+
+**Cron jobs** belong to an app. On each run Docklet starts a one-off container from the image of the app's *current deployment*, with the app's environment (as it is now), the project network and its resource limits. When the run ends, the output is saved and the container is removed.
+
+- **Schedule:** standard 5-field cron (`*/5 * * * *`, `0 3 * * mon-fri`, `@daily`), evaluated in a time zone you choose. The dashboard previews the next run times.
+- **Timeout:** a run that exceeds its timeout (default 1 h) is stopped and marked `timeout`.
+- **Concurrency:** with `skip` (the default), a run that comes due while the previous one is still going is recorded as `skipped`. With `allow`, the runs overlap.
+- **History:** the last 100 runs per job are kept, each with status, exit code, duration and the last 64 KB of output. You can **Run now**, pause, or stop a run in progress.
+- **Downtime:** runs missed while Docklet was down are not caught up; the next run is the next scheduled time. A run interrupted by a Docklet restart is marked failed.
+
+Creating, changing, deleting, running and cancelling jobs is audited. Scheduled runs are not audited, but each one appears in the run history.
+
 ### Monitoring
 
 **Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.

@@ -280,6 +280,25 @@ func (c *Client) ContainerStop(ctx context.Context, id string, timeoutSec int) e
 	return c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/stop", q, nil, nil)
 }
 
+// ContainerWait blocks until the container is not running and returns its
+// exit code. Cancel ctx to stop waiting.
+func (c *Client) ContainerWait(ctx context.Context, id string) (int, error) {
+	var out struct {
+		StatusCode int `json:"StatusCode"`
+		Error      *struct {
+			Message string `json:"Message"`
+		} `json:"Error"`
+	}
+	q := url.Values{"condition": {"not-running"}}
+	if err := c.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(id)+"/wait", q, nil, &out); err != nil {
+		return 0, err
+	}
+	if out.Error != nil && out.Error.Message != "" {
+		return out.StatusCode, fmt.Errorf("docker: wait: %s", out.Error.Message)
+	}
+	return out.StatusCode, nil
+}
+
 // ContainerRestart restarts a container.
 func (c *Client) ContainerRestart(ctx context.Context, id string, timeoutSec int) error {
 	q := url.Values{"t": {strconv.Itoa(timeoutSec)}}

@@ -33,6 +33,8 @@ type App struct {
 	WebhookToken        sql.NullString
 	WebhookSecretEnc    []byte
 	AutoDeploy          int64
+	Kind                string
+	Command             string
 }
 
 type AuditLog struct {
@@ -58,6 +60,35 @@ type Backup struct {
 	Error      string
 	StartedAt  int64
 	FinishedAt int64
+}
+
+type CronJob struct {
+	ID          int64
+	AppID       int64
+	Name        string
+	Schedule    string
+	Timezone    string
+	Command     string
+	TimeoutSec  int64
+	Concurrency string
+	Enabled     int64
+	NextRunAt   int64
+	CreatedAt   int64
+	UpdatedAt   int64
+}
+
+type CronRun struct {
+	ID          int64
+	JobID       int64
+	Trigger     string
+	Status      string
+	ExitCode    sql.NullInt64
+	ContainerID string
+	Error       string
+	Logs        string
+	StartedAt   int64
+	FinishedAt  sql.NullInt64
+	DurationMs  int64
 }
 
 type Database struct {
