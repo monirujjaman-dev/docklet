@@ -67,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdRestore(args[1:], stdout, stderr)
 	case "upgrade":
 		return cmdUpgrade(args[1:], stdout, stderr)
+	case "self-update":
+		return cmdSelfUpdate(args[1:], stderr)
 	case "audit":
 		if len(args) > 1 && args[1] == "verify" {
 			return cmdAuditVerify(args[2:], stdout, stderr)

@@ -216,6 +216,11 @@ type ContainerSpec struct {
 	Privileged bool
 	PidMode    string   // "host" shares the host's PID namespace
 	Binds      []string // host paths, "src:dst[:ro]"
+
+	// Interactive containers (host terminal).
+	Tty       bool
+	OpenStdin bool
+	WorkDir   string
 }
 
 // ContainerCreate creates (but does not start) a container.
@@ -279,6 +284,16 @@ func (c *Client) ContainerCreate(ctx context.Context, s ContainerSpec) (string, 
 	}
 	if s.Entrypoint != nil {
 		body["Entrypoint"] = s.Entrypoint
+	}
+	if s.Tty {
+		body["Tty"] = true
+	}
+	if s.OpenStdin {
+		body["OpenStdin"], body["StdinOnce"], body["AttachStdin"] = true, true, true
+		body["AttachStdout"], body["AttachStderr"] = true, true
+	}
+	if s.WorkDir != "" {
+		body["WorkingDir"] = s.WorkDir
 	}
 	if s.Network == "host" || s.Network == "none" {
 		delete(body, "NetworkingConfig") // aliases only apply to user-defined networks
@@ -621,10 +636,16 @@ func (t *tailBuffer) String() string { return string(t.buf) }
 
 // CopyTo writes one file into a container (running or stopped) at dir/name.
 func (c *Client) CopyTo(ctx context.Context, id, dir, name string, content io.Reader, size int64, mode int64) error {
+	return c.CopyToOwned(ctx, id, dir, &tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg}, content, false)
+}
+
+// CopyToOwned is CopyTo with a full tar header; keepOwner keeps the
+// header's uid/gid (otherwise Docker makes root the owner).
+func (c *Client) CopyToOwned(ctx context.Context, id, dir string, hdr *tar.Header, content io.Reader, keepOwner bool) error {
 	pr, pw := io.Pipe()
 	go func() {
 		tw := tar.NewWriter(pw)
-		err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg})
+		err := tw.WriteHeader(hdr)
 		if err == nil {
 			_, err = io.Copy(tw, content)
 		}
@@ -638,7 +659,7 @@ func (c *Client) CopyTo(ctx context.Context, id, dir, name string, content io.Re
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		p+"/containers/"+url.PathEscape(id)+"/archive?"+url.Values{"path": {dir}}.Encode(), pr)
+		p+"/containers/"+url.PathEscape(id)+"/archive?"+copyQuery(dir, keepOwner), pr)
 	if err != nil {
 		return err
 	}
@@ -653,6 +674,14 @@ func (c *Client) CopyTo(ctx context.Context, id, dir, name string, content io.Re
 		return fmt.Errorf("docker: copy to container: %s: %s", res.Status, strings.TrimSpace(string(b)))
 	}
 	return nil
+}
+
+func copyQuery(dir string, keepOwner bool) string {
+	q := url.Values{"path": {dir}}
+	if keepOwner {
+		q.Set("copyUIDGID", "1")
+	}
+	return q.Encode()
 }
 
 // CopyFrom streams one file out of a container into w.
@@ -672,4 +701,39 @@ func (c *Client) CopyFrom(ctx context.Context, id, path string, w io.Writer) (in
 			return io.Copy(w, tr) //nolint:gosec // archive from our own container; caller bounds the destination
 		}
 	}
+}
+
+// CopyArchive streams path from a container as a tar archive.
+func (c *Client) CopyArchive(ctx context.Context, id, path string, w io.Writer) error {
+	res, err := c.request(ctx, http.MethodGet, "/containers/"+url.PathEscape(id)+"/archive", url.Values{"path": {path}}, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	_, err = io.Copy(w, res.Body)
+	return err
+}
+
+// Volume is a named volume.
+type Volume struct {
+	Name       string            `json:"Name"`
+	Mountpoint string            `json:"Mountpoint"`
+	Driver     string            `json:"Driver"`
+	Labels     map[string]string `json:"Labels"`
+}
+
+// VolumeList lists named volumes.
+func (c *Client) VolumeList(ctx context.Context) ([]Volume, error) {
+	var out struct {
+		Volumes []Volume `json:"Volumes"`
+	}
+	err := c.do(ctx, http.MethodGet, "/volumes", nil, nil, &out)
+	return out.Volumes, err
+}
+
+// VolumeInspect returns one volume.
+func (c *Client) VolumeInspect(ctx context.Context, name string) (Volume, error) {
+	var v Volume
+	err := c.do(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, nil, &v)
+	return v, err
 }

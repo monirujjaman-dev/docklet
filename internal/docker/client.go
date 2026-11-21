@@ -33,6 +33,7 @@ var (
 type Client struct {
 	hc   *http.Client
 	base string
+	dial func(ctx context.Context) (net.Conn, error) // raw connection, for hijacked streams
 
 	mu      sync.Mutex
 	version string
@@ -48,7 +49,10 @@ func New(socket string) *Client {
 		MaxIdleConns:    4,
 		IdleConnTimeout: 30 * time.Second,
 	}
-	return &Client{hc: &http.Client{Transport: tr}, base: "http://docker"}
+	return &Client{hc: &http.Client{Transport: tr}, base: "http://docker", dial: func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", socket)
+	}}
 }
 
 // newWithHTTP is used by tests to point the client at an httptest server.

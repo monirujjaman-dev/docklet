@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, type Backup, type DatabaseDetail, type DbUser, type Destination } from "../lib/api";
-  import { router } from "../lib/router.svelte";
+  import { link, router } from "../lib/router.svelte";
   import { bytes } from "../lib/format";
   import StatusBadge from "../lib/StatusBadge.svelte";
 
@@ -169,6 +169,7 @@
         {d.name}
         <StatusBadge status={d.runtimeStatus} />
         {#if d.publicPort}<span class="text-xs rounded-full px-2 py-0.5 bg-amber-950 text-amber-300">public :{d.publicPort}</span>{/if}
+        {#if d.runtimeStatus === "running"}<a href="/terminal?kind=database&id={d.id}" use:link class="text-xs font-normal text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5">Terminal</a>{/if}
       </h1>
       <p class="text-xs text-neutral-500 mt-1">{d.engineLabel} {d.version}{d.memoryMb ? ` · ${d.memoryMb} MB limit` : ""}</p>
     </div>

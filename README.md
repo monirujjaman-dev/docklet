@@ -141,6 +141,17 @@ Creating, changing, deleting, running and cancelling jobs is audited. Scheduled 
 
 Changes need Ubuntu or Debian with systemd; other hosts are read-only. See [docs/server.md](docs/server.md).
 
+### Terminal and files
+
+- **Terminal:** a browser terminal for the server and for any app or database container. Colours, resizing, `htop` and `vim` work. Session start and end are audited.
+- **Files:** a file manager for the server and Docker volumes. It edits text files (with a check for changes made meanwhile) and handles uploads and downloads up to 1 GB, rename, move, delete, `chmod` and `chown`. Paths can't escape a volume, and system folders are protected.
+
+Both need a login from the last 10 minutes. See [docs/server.md](docs/server.md#terminal).
+
+### Updates
+
+**Settings → Updates → Update now** upgrades a container install from the dashboard: it takes a backup, swaps the container and rolls back automatically if the new version isn't healthy. Patch releases can be installed automatically in a maintenance window. See [docs/upgrade.md](docs/upgrade.md).
+
 ### Monitoring
 
 **Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.
