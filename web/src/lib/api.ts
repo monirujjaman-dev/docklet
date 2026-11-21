@@ -191,6 +191,7 @@ export type DbSummary = {
   runtimeStatus: string;
   runtimeMessage?: string;
   publicPort?: number;
+  publicAllow: string[];
 };
 
 export type Backup = {

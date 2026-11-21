@@ -33,6 +33,8 @@ type dbSummary struct {
 	RuntimeStatus  string `json:"runtimeStatus"`
 	RuntimeMessage string `json:"runtimeMessage,omitempty"`
 	PublicPort     int64  `json:"publicPort,omitempty"`
+	// Sources allowed to reach PublicPort; empty = anyone.
+	PublicAllow []string `json:"publicAllow"`
 }
 
 func toDBSummary(d db.Database) dbSummary {
@@ -43,7 +45,15 @@ func toDBSummary(d db.Database) dbSummary {
 	return dbSummary{
 		ID: d.ID, ProjectID: d.ProjectID, Name: d.Name, Engine: d.Engine, EngineLabel: label, Version: d.Version,
 		RuntimeStatus: d.RuntimeStatus, RuntimeMessage: d.RuntimeMessage, PublicPort: d.PublicPort,
+		PublicAllow: splitList(d.PublicAllow),
 	}
+}
+
+func splitList(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+	return strings.Split(s, ",")
 }
 
 func (s *Server) auditDB(ctx context.Context, q *db.Queries, r *http.Request, id int64, action string, details map[string]any) error {
@@ -394,6 +404,9 @@ func (s *Server) handleDatabasePublic(w http.ResponseWriter, r *http.Request) er
 	}); err != nil {
 		return err
 	}
+	if d.PublicAllow != "" {
+		s.refreshAllowlist(ctx) // the allowlist follows the port
+	}
 	return s.handleGetDatabase(w, r)
 }
 
@@ -601,6 +614,9 @@ func (s *Server) handleDeleteDatabase(w http.ResponseWriter, r *http.Request) er
 	})
 	if err != nil {
 		return err
+	}
+	if d.PublicAllow != "" {
+		s.refreshAllowlist(ctx)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	return nil

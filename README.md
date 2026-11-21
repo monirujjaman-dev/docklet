@@ -131,7 +131,13 @@ Creating, changing, deleting, running and cancelling jobs is audited. Scheduled 
 - reboot (typed confirmation);
 - listening ports mapped to apps and databases;
 - processes;
-- systemd services with logs.
+- systemd services with logs;
+- **Security:**
+  - SSH port, root login and password login changes, which the server undoes by itself unless you confirm within 5 minutes;
+  - SSH keys;
+  - the ufw firewall, which always keeps SSH, HTTP(S) and the panel open;
+  - Fail2Ban with ban/unban;
+  - an IP allowlist for public database ports.
 
 Changes need Ubuntu or Debian with systemd; other hosts are read-only. See [docs/server.md](docs/server.md).
 

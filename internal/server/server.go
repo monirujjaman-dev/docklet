@@ -78,6 +78,7 @@ type Server struct {
 	dests    *destinations.Service
 	sbRunner selfBackupRunner
 	host     hostState
+	sec      securityState
 	sbEvery  time.Duration
 	cronTune func(*cron.Service)
 	apps     *apps.Service
@@ -279,6 +280,25 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/server/services/{unit}/logs", authed(s.handleServerServiceLogs))
 	mux.HandleFunc("GET /api/server/cleanup", authed(s.handleServerCleanupPreview))
 	mux.HandleFunc("POST /api/server/cleanup", authed(s.handleServerCleanup))
+	mux.HandleFunc("GET /api/server/security/pending", authed(s.handleSecurityPending))
+	mux.HandleFunc("POST /api/server/security/pending/confirm", authed(s.handleSecurityConfirm))
+	mux.HandleFunc("POST /api/server/security/pending/undo", authed(s.handleSecurityUndo))
+	mux.HandleFunc("GET /api/server/ssh", authed(s.handleSSHStatus))
+	mux.HandleFunc("PUT /api/server/ssh", authed(s.handleSSHChange))
+	mux.HandleFunc("POST /api/server/ssh/keys", authed(s.handleSSHAddKey))
+	mux.HandleFunc("POST /api/server/ssh/keys/delete", authed(s.handleSSHRemoveKey))
+	mux.HandleFunc("GET /api/server/firewall", authed(s.handleFirewall))
+	mux.HandleFunc("POST /api/server/firewall/install", authed(s.handleFirewallInstall))
+	mux.HandleFunc("POST /api/server/firewall/enable", authed(s.handleFirewallEnable))
+	mux.HandleFunc("POST /api/server/firewall/disable", authed(s.handleFirewallDisable))
+	mux.HandleFunc("POST /api/server/firewall/rules", authed(s.handleFirewallAddRule))
+	mux.HandleFunc("POST /api/server/firewall/rules/delete", authed(s.handleFirewallDeleteRule))
+	mux.HandleFunc("PUT /api/server/firewall/defaults", authed(s.handleFirewallDefaults))
+	mux.HandleFunc("GET /api/server/fail2ban", authed(s.handleFail2Ban))
+	mux.HandleFunc("POST /api/server/fail2ban/install", authed(s.handleFail2BanInstall))
+	mux.HandleFunc("PUT /api/server/fail2ban", authed(s.handleFail2BanConfigure))
+	mux.HandleFunc("POST /api/server/fail2ban/unban", authed(s.handleFail2BanUnban))
+	mux.HandleFunc("PUT /api/databases/{id}/allowlist", authed(s.handleDatabaseAllowlist))
 	mux.HandleFunc("POST /api/system/backup", authed(s.handleSystemBackup))
 	mux.HandleFunc("GET /api/system/backup-schedule", authed(s.handleGetSelfBackupSchedule))
 	mux.HandleFunc("PUT /api/system/backup-schedule", authed(s.handlePutSelfBackupSchedule))
@@ -371,6 +391,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.dbs != nil {
 		go s.dbs.Run(ctx)
+		go s.runAllowlist(ctx, 5*time.Minute)
 	}
 	if s.cfg.DataDir != "" {
 		go s.runSelfBackupSchedule(ctx, s.sbEvery)

@@ -73,3 +73,6 @@ DELETE FROM database_links WHERE database_id = ? AND app_id = ?;
 SELECT l.app_id, l.env_key, a.name AS app_name
 FROM database_links l JOIN apps a ON a.id = l.app_id
 WHERE l.database_id = ? ORDER BY a.name;
+
+-- name: SetDatabasePublicAllow :exec
+UPDATE databases SET public_allow = ?, updated_at = ? WHERE id = ?;

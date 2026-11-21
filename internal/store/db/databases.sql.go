@@ -55,7 +55,7 @@ const createDatabase = `-- name: CreateDatabase :one
 INSERT INTO databases (project_id, name, engine, version, db_name, username, password_enc, root_password_enc,
                        memory_mb, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id
+RETURNING id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id, public_allow
 `
 
 type CreateDatabaseParams struct {
@@ -108,6 +108,7 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BackupDestinationID,
+		&i.PublicAllow,
 	)
 	return i, err
 }
@@ -207,7 +208,7 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 }
 
 const getDatabase = `-- name: GetDatabase :one
-SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id FROM databases WHERE id = ?
+SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id, public_allow FROM databases WHERE id = ?
 `
 
 func (q *Queries) GetDatabase(ctx context.Context, id int64) (Database, error) {
@@ -234,6 +235,7 @@ func (q *Queries) GetDatabase(ctx context.Context, id int64) (Database, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BackupDestinationID,
+		&i.PublicAllow,
 	)
 	return i, err
 }
@@ -333,7 +335,7 @@ func (q *Queries) ListDatabaseLinks(ctx context.Context, databaseID int64) ([]Li
 }
 
 const listDatabases = `-- name: ListDatabases :many
-SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id FROM databases ORDER BY project_id, name
+SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id, public_allow FROM databases ORDER BY project_id, name
 `
 
 func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
@@ -366,6 +368,7 @@ func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BackupDestinationID,
+			&i.PublicAllow,
 		); err != nil {
 			return nil, err
 		}
@@ -492,6 +495,21 @@ type SetDatabaseDesiredParams struct {
 
 func (q *Queries) SetDatabaseDesired(ctx context.Context, arg SetDatabaseDesiredParams) error {
 	_, err := q.db.ExecContext(ctx, setDatabaseDesired, arg.DesiredStatus, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const setDatabasePublicAllow = `-- name: SetDatabasePublicAllow :exec
+UPDATE databases SET public_allow = ?, updated_at = ? WHERE id = ?
+`
+
+type SetDatabasePublicAllowParams struct {
+	PublicAllow string
+	UpdatedAt   int64
+	ID          int64
+}
+
+func (q *Queries) SetDatabasePublicAllow(ctx context.Context, arg SetDatabasePublicAllowParams) error {
+	_, err := q.db.ExecContext(ctx, setDatabasePublicAllow, arg.PublicAllow, arg.UpdatedAt, arg.ID)
 	return err
 }
 
