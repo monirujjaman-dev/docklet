@@ -28,7 +28,8 @@ them.
 | HTTP headers | Strict CSP (`script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, COOP/CORP same-origin, a restrictive Permissions-Policy, and HSTS over HTTPS |
 | Public endpoints | Only health, version (the release name only), setup (until an admin exists), login, the panel-domain probe and webhooks (HMAC or token, constant-time comparison) |
 | Caddy admin API | Listens only on `172.30.0.2:2019`, on the internal `docklet` network. App containers are on per-project networks and can't reach it (Docker isolates bridge networks) |
-| Databases | Private to their project's network by default; a public port is an explicit, audited toggle |
+| Databases | Private to their project's network by default; a public port is an explicit, audited toggle. Extra users get only their role's privileges on their own database: no superuser, no `CREATE ROLE`/`CREATE USER`, and no Redis `CONFIG`/`ACL` |
+| S3 destinations | Secret keys are encrypted under the master key, never returned by the API, and kept out of the audit log. Requests are signed with AWS Signature V4; uploads are checksummed (SHA-256 per part) |
 | Git builds | Only `https`, `http` and `ssh` URLs, also for redirects (`GIT_ALLOW_PROTOCOL`). No credentials in URLs; branch and paths are validated. Build context and Dockerfile are resolved with symlinks and must stay inside the checkout |
 | Inputs to Docker and Caddy | Names, image references, env keys, domains, ports, limits and commands are validated. Commands run without a shell, so there is no interpolation |
 | Backups | Self-backups contain the master key. Downloads need your password again and are always encrypted (argon2id + XChaCha20-Poly1305, with chunks authenticated so truncation or reordering is detected) and audited |

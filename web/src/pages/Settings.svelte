@@ -3,6 +3,7 @@
   import { api, type PanelState } from "../lib/api";
   import Field from "../lib/Field.svelte";
   import SystemPanel from "../lib/SystemPanel.svelte";
+  import DestinationsPanel from "../lib/DestinationsPanel.svelte";
 
   let panel = $state<PanelState | null>(null);
   let domain = $state("");
@@ -133,5 +134,7 @@
     </dl>
   {/if}
 </section>
+
+<DestinationsPanel />
 
 <SystemPanel />

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type Backup, type DatabaseDetail } from "../lib/api";
+  import { api, type Backup, type DatabaseDetail, type DbUser, type Destination } from "../lib/api";
   import { router } from "../lib/router.svelte";
   import { bytes } from "../lib/format";
   import StatusBadge from "../lib/StatusBadge.svelte";
@@ -8,7 +8,7 @@
   let { dbId }: { dbId: string } = $props();
 
   let d = $state<DatabaseDetail | null>(null);
-  let tab = $state<"connection" | "apps" | "backups">("connection");
+  let tab = $state<"connection" | "apps" | "users" | "backups">("connection");
   let error = $state("");
   let busy = $state("");
   let creds = $state<{ password: string; rootPassword?: string; url: string } | null>(null);
@@ -65,7 +65,43 @@
     linkApp = "";
   }
 
+  // Users
+  let newUser = $state("");
+  let newRole = $state("readonly");
+  let shown = $state<Record<number, { password: string; url: string }>>({});
+  const roleText: Record<string, string> = {
+    readonly: "Read only: SELECT / GET",
+    readwrite: "Read & write data, no schema changes",
+    admin: "All data, plus creating tables (PostgreSQL: may alter/drop only tables it created)",
+  };
+  function addUser(e: SubmitEvent) {
+    e.preventDefault();
+    run("user", async () => {
+      const u = await api<DbUser>(`/databases/${dbId}/users`, { json: { username: newUser.trim(), role: newRole } });
+      newUser = "";
+      shown[u.id] = await api(`/database-users/${u.id}/credentials`);
+    });
+  }
+  const reveal = (u: DbUser) => run("reveal", async () => { shown[u.id] = await api(`/database-users/${u.id}/credentials`); });
+  const setRole = (u: DbUser, role: string) => run("role", () => api(`/database-users/${u.id}`, { method: "PATCH", json: { role } }));
+  function resetPw(u: DbUser) {
+    if (!confirm(`Generate a new password for ${u.username}? Apps using the old one stop connecting.`)) return;
+    run("reset", async () => {
+      await api(`/database-users/${u.id}`, { method: "PATCH", json: { resetPassword: true } });
+      shown[u.id] = await api(`/database-users/${u.id}/credentials`);
+    });
+  }
+  function removeUser(u: DbUser) {
+    if (!confirm(`Delete user ${u.username}? Objects it owns are handed to ${d?.username ?? "the owner"}.`)) return;
+    run("deluser", () => api(`/database-users/${u.id}`, { method: "DELETE" }));
+  }
+
   // Backups
+  let dests = $state<Destination[]>([]);
+  let destSel = $state("");
+  const setDest = () =>
+    run("dest", () => api(`/databases/${dbId}/backup-destination`, { method: "PUT", json: { destinationId: destSel ? Number(destSel) : null } }));
+  const retryUpload = (b: Backup) => run("upload", () => api(`/backups/${b.id}/upload`, { method: "POST" }));
   let schedule = $state("daily");
   let keep = $state("7");
   function savePolicy(e: SubmitEvent) {
@@ -81,7 +117,7 @@
     if (!d) return;
     const typed = prompt(`Delete database "${d.name}"? Type its name to confirm.`);
     if (typed !== d.name) return;
-    const deleteData = confirm("Also delete its data volume and all backups? Cancel keeps them on disk.");
+    const deleteData = confirm("Also delete its data volume and the backups on this server? Cancel keeps them on disk. Backups uploaded to S3 are always kept.");
     try {
       await api(`/databases/${dbId}${deleteData ? "?deleteData=1" : ""}`, { method: "DELETE" });
       router.go("/");
@@ -97,11 +133,13 @@
 
   let filled = false;
   onMount(() => {
+    api<{ destinations: Destination[] }>("/destinations").then((r) => (dests = r.destinations)).catch(() => {});
     load().then(() => {
       if (d && !filled) {
         schedule = d.backupSchedule;
         keep = String(d.backupKeep);
         publicPort = String(d.publicPort || d.port + 10000);
+        destSel = d.backupDestinationId ? String(d.backupDestinationId) : "";
         filled = true;
       }
     });
@@ -112,6 +150,7 @@
   const tabs = [
     ["connection", "Connection"],
     ["apps", "Linked apps"],
+    ["users", "Users"],
     ["backups", "Backups"],
   ] as const;
   const row = "flex items-center justify-between gap-4 px-3 py-2 text-sm";
@@ -234,6 +273,49 @@
         <p class="text-sm text-neutral-500">Create an app in {d.projectName} to link it.</p>
       {/if}
     </section>
+  {:else if tab === "users"}
+    <section class="space-y-4 max-w-4xl">
+      <p class="text-sm text-neutral-400">
+        Extra users for apps or people that need less than full access. The owner <span class="font-mono">{d.username || "default"}</span> stays the
+        administrator used by Docklet and by "Link to app".
+      </p>
+      {#if d.runtimeStatus !== "running"}<p class="text-sm text-amber-300">Start the database to change users.</p>{/if}
+      <div class="rounded-md border border-neutral-800 divide-y divide-neutral-800">
+        {#each d.users as u (u.id)}
+          <div class="px-3 py-2 text-sm space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <span class="font-mono">{u.username}</span>
+              <span class="flex items-center gap-3">
+                <select value={u.role} onchange={(e) => setRole(u, (e.target as HTMLSelectElement).value)} disabled={!!busy}
+                  class="rounded-md bg-neutral-900 border border-neutral-700 px-2 py-1 text-xs">
+                  {#each d.roles as r}<option value={r}>{r}</option>{/each}
+                </select>
+                <button onclick={() => reveal(u)} class="text-xs text-neutral-300 hover:underline">Credentials</button>
+                <button onclick={() => resetPw(u)} class="text-xs text-neutral-300 hover:underline">New password</button>
+                <button onclick={() => removeUser(u)} class="text-xs text-neutral-500 hover:text-red-300">Delete</button>
+              </span>
+            </div>
+            <p class="text-xs text-neutral-500">{roleText[u.role]}</p>
+            {#if shown[u.id]}
+              <div class="rounded bg-neutral-900 border border-neutral-800 p-2 font-mono text-xs break-all select-all">{shown[u.id].url}</div>
+              <button onclick={() => copy(shown[u.id].url, "u" + u.id)} class="text-xs text-neutral-300 hover:underline">{copied === "u" + u.id ? "Copied" : "Copy URL"}</button>
+            {/if}
+          </div>
+        {:else}
+          <p class="px-3 py-4 text-sm text-neutral-500">No extra users.</p>
+        {/each}
+      </div>
+      <form onsubmit={addUser} class="flex flex-wrap gap-2 items-end">
+        <label class="text-sm">User name
+          <input bind:value={newUser} placeholder="reporting" class="block mt-1 w-44 rounded-md bg-neutral-900 border border-neutral-700 px-3 py-1.5 text-sm font-mono" /></label>
+        <label class="text-sm">Permissions
+          <select bind:value={newRole} class="block mt-1 rounded-md bg-neutral-900 border border-neutral-700 px-3 py-1.5 text-sm">
+            <option value="readonly">Read only</option><option value="readwrite">Read & write</option><option value="admin">Admin</option>
+          </select></label>
+        <button disabled={!newUser || !!busy || d.runtimeStatus !== "running"} class="rounded-md border border-neutral-700 hover:border-neutral-500 px-3 py-1.5 text-sm disabled:opacity-50">Add user</button>
+      </form>
+      <p class="text-xs text-neutral-500">{roleText[newRole]}. A strong password is generated; credentials views are audited.</p>
+    </section>
   {:else}
     <section class="space-y-5 max-w-4xl">
       <div class="flex flex-wrap items-end gap-4">
@@ -252,11 +334,22 @@
           class="ml-auto rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3 py-1.5 text-sm font-medium">Back up now</button
         >
       </div>
-      <p class="text-xs text-neutral-500">Backups are stored on this server in Docklet's data directory. Copy important ones elsewhere (Download).</p>
+      <div class="flex flex-wrap items-end gap-2">
+        <label class="text-sm">Also upload to
+          <select bind:value={destSel} onchange={setDest} class="block mt-1 rounded-md bg-neutral-900 border border-neutral-700 px-3 py-1.5 text-sm">
+            <option value="">Nowhere (this server only)</option>
+            {#each dests as x}<option value={String(x.id)}>{x.name} ({x.bucket})</option>{/each}
+          </select></label>
+        {#if dests.length === 0}<a href="/settings" class="text-xs text-emerald-300 hover:underline pb-2">Add an S3 destination in Settings</a>{/if}
+      </div>
+      <p class="text-xs text-neutral-500">
+        Backups are kept on this server{destSel ? " and uploaded to the destination" : ""}; "Keep" applies to both.
+        {#if !destSel}Without a destination they are lost with the server.{/if}
+      </p>
       <div class="overflow-x-auto rounded-md border border-neutral-800">
         <table class="w-full text-sm">
           <thead class="bg-neutral-900 text-neutral-400 text-left">
-            <tr><th class="px-3 py-2 font-medium">#</th><th class="px-3 py-2 font-medium">Started</th><th class="px-3 py-2 font-medium">Type</th><th class="px-3 py-2 font-medium">Status</th><th class="px-3 py-2 font-medium text-right">Size</th><th></th></tr>
+            <tr><th class="px-3 py-2 font-medium">#</th><th class="px-3 py-2 font-medium">Started</th><th class="px-3 py-2 font-medium">Type</th><th class="px-3 py-2 font-medium">Status</th><th class="px-3 py-2 font-medium">Stored</th><th class="px-3 py-2 font-medium text-right">Size</th><th></th></tr>
           </thead>
           <tbody>
             {#each d.backups as b (b.id)}
@@ -265,6 +358,15 @@
                 <td class="px-3 py-2 whitespace-nowrap">{fmt(b.startedAt)}</td>
                 <td class="px-3 py-2 text-neutral-400">{b.trigger}</td>
                 <td class="px-3 py-2"><StatusBadge status={b.status === "running" ? "pending" : b.status} />{#if b.error}<div class="text-xs text-red-300 mt-1 max-w-xs truncate" title={b.error}>{b.error}</div>{/if}</td>
+                <td class="px-3 py-2 whitespace-nowrap text-xs">
+                  {#if b.status === "succeeded"}
+                    {#if b.local}<span class="rounded bg-neutral-800 px-1.5 py-0.5 mr-1">server</span>{/if}
+                    {#if b.remoteStatus === "uploaded"}<span class="rounded bg-sky-950 text-sky-300 px-1.5 py-0.5">S3</span>
+                    {:else if b.remoteStatus === "uploading"}<span class="text-neutral-400">uploading…</span>
+                    {:else if b.remoteStatus === "failed"}<span class="text-red-300" title={b.remoteError}>upload failed</span>
+                      {#if b.local}<button onclick={() => retryUpload(b)} class="ml-1 underline">retry</button>{/if}{/if}
+                  {/if}
+                </td>
                 <td class="px-3 py-2 text-right tabular-nums">{b.status === "succeeded" ? bytes(b.sizeBytes) : ""}</td>
                 <td class="px-3 py-2 text-right whitespace-nowrap">
                   {#if b.status === "succeeded"}
@@ -274,7 +376,7 @@
                 </td>
               </tr>
             {:else}
-              <tr><td colspan="6" class="px-3 py-6 text-center text-neutral-500">No backups yet.</td></tr>
+              <tr><td colspan="7" class="px-3 py-6 text-center text-neutral-500">No backups yet.</td></tr>
             {/each}
           </tbody>
         </table>

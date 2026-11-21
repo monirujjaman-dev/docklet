@@ -17,6 +17,7 @@ import (
 
 	"github.com/monirujjaman-dev/docklet/internal/audit"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
+	"github.com/monirujjaman-dev/docklet/internal/s3"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
@@ -68,6 +69,8 @@ type Service struct {
 	EnsureNetwork func(ctx context.Context, projectID int64) (string, error)
 	// SealEnv encrypts an app env value (for links).
 	SealEnv func(appID int64, key, value string) ([]byte, error)
+	// Remote returns a client for a backup destination (nil: local only).
+	Remote func(ctx context.Context, destinationID int64) (*s3.Client, error)
 
 	BackupDir         string
 	ReadyTimeout      time.Duration
@@ -281,7 +284,15 @@ func (s *Service) create(ctx context.Context, d db.Database, pull bool) error {
 		return err
 	}
 	s.setRuntime(ctx, d.ID, StatusCreating, "Waiting for the database to accept connections…")
-	return s.waitReady(ctx, e, creds, id)
+	if err := s.waitReady(ctx, e, creds, id); err != nil {
+		return err
+	}
+	// Users live in the data volume (Redis: in memory); re-apply them.
+	d.ContainerID = id
+	if err := s.syncUsers(ctx, d); err != nil {
+		s.log.Warn("re-apply database users", "database", d.Name, "err", err)
+	}
+	return nil
 }
 
 func (s *Service) waitReady(ctx context.Context, e *Engine, c Creds, id string) error {
@@ -367,6 +378,11 @@ func (s *Service) lifecycle(ctx context.Context, id int64, action string) error 
 		if err := s.waitReady(ctx, e, c, d.ContainerID); err != nil {
 			s.setRuntime(ctx, id, StatusFailed, err.Error())
 			return err
+		}
+		if d.Engine == "redis" {
+			if err := s.syncUsers(ctx, d); err != nil {
+				s.log.Warn("re-apply redis users", "database", d.Name, "err", err)
+			}
 		}
 	}
 	s.setRuntime(ctx, id, desired, "")
@@ -558,6 +574,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		case err != nil:
 			return err
 		case info.State.Running:
+			if d.Engine == "redis" && d.RuntimeStatus == StatusRunning {
+				s.repairRedisUsers(ctx, d) // ACL users don't survive a Redis restart
+			}
 		case d.DesiredStatus == StatusStopped:
 			status = StatusStopped
 		default:

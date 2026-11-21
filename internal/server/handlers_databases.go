@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/audit"
 	"github.com/monirujjaman-dev/docklet/internal/databases"
@@ -236,6 +237,13 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) error
 		StartedAt  int64  `json:"startedAt"`
 		FinishedAt int64  `json:"finishedAt,omitempty"`
 		File       string `json:"file,omitempty"`
+		Local      bool   `json:"local"`
+		Remote     string `json:"remoteStatus,omitempty"`
+		RemoteErr  string `json:"remoteError,omitempty"`
+	}
+	users, err := s.st.Q.ListDatabaseUsers(ctx, d.ID)
+	if err != nil {
+		return err
 	}
 	out := struct {
 		dbSummary
@@ -253,11 +261,21 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) error
 		Apps           []appRef    `json:"apps"`
 		Backups        []backupDTO `json:"backups"`
 		CreatedAt      int64       `json:"createdAt"`
+		DestinationID  *int64      `json:"backupDestinationId"`
+		Users          []dbUserDTO `json:"users"`
+		Roles          []string    `json:"roles"`
 	}{
 		dbSummary: toDBSummary(d), ProjectName: project.Name, Host: strings.ToLower(d.Name), Port: e.Port,
 		DBName: d.DbName, Username: d.Username, MemoryMB: d.MemoryMb, DesiredStatus: d.DesiredStatus,
 		BackupSchedule: d.BackupSchedule, BackupKeep: d.BackupKeep, DefaultEnvKey: e.DefaultEnvKey,
 		Links: []linkDTO{}, Apps: []appRef{}, Backups: []backupDTO{}, CreatedAt: d.CreatedAt,
+		Users: []dbUserDTO{}, Roles: databases.Roles,
+	}
+	if d.BackupDestinationID.Valid {
+		out.DestinationID = &d.BackupDestinationID.Int64
+	}
+	for _, u := range users {
+		out.Users = append(out.Users, toDBUserDTO(u))
 	}
 	for _, l := range links {
 		out.Links = append(out.Links, linkDTO{AppID: l.AppID, AppName: l.AppName, EnvKey: l.EnvKey})
@@ -269,6 +287,7 @@ func (s *Server) handleGetDatabase(w http.ResponseWriter, r *http.Request) error
 		out.Backups = append(out.Backups, backupDTO{
 			ID: b.ID, Trigger: b.Trigger, Status: b.Status, SizeBytes: b.SizeBytes, Error: b.Error,
 			StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, File: filepath.Base(b.File),
+			Local: s.dbs.HasLocalFile(b), Remote: b.RemoteStatus, RemoteErr: b.RemoteError,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -487,14 +506,17 @@ func (s *Server) handleDownloadBackup(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return notFoundAs(err, "backup")
 	}
-	f, err := s.dbs.OpenBackup(b)
+	f, size, err := s.dbs.OpenBackupReader(r.Context(), b)
 	if err != nil {
 		return errf(http.StatusNotFound, "%s", err.Error())
 	}
 	defer func() { _ = f.Close() }()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(b.File)))
-	w.Header().Set("Content-Length", strconv.FormatInt(b.SizeBytes, 10))
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	_, _ = io.Copy(w, f)
 	return nil
 }

@@ -79,6 +79,22 @@ const (
 	ActionRestoreRequested   = "database.restore_requested"
 	ActionRestoreSucceeded   = "database.restore_succeeded"
 	ActionRestoreFailed      = "database.restore_failed"
+	ActionBackupUploaded     = "database.backup_uploaded"
+	ActionBackupUploadFailed = "database.backup_upload_failed"
+	ActionDestinationChanged = "database.backup_destination_changed"
+	ActionDBUserCreated      = "database.user_created"
+	ActionDBUserUpdated      = "database.user_updated"
+	ActionDBUserDeleted      = "database.user_deleted"
+	ActionDBUserRevealed     = "database.user_credentials_viewed"
+
+	ActionS3Created = "s3_destination.created"
+	ActionS3Updated = "s3_destination.updated"
+	ActionS3Deleted = "s3_destination.deleted"
+	ActionS3Tested  = "s3_destination.tested"
+
+	ActionSelfBackupPolicy   = "system.backup_schedule_changed"
+	ActionSelfBackupUploaded = "system.backup_uploaded"
+	ActionSelfBackupFailed   = "system.backup_upload_failed"
 
 	ActionCronCreated      = "cron.created"
 	ActionCronUpdated      = "cron.updated"

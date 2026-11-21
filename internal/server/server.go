@@ -17,8 +17,10 @@ import (
 	"github.com/monirujjaman-dev/docklet/internal/caddy"
 	"github.com/monirujjaman-dev/docklet/internal/cron"
 	"github.com/monirujjaman-dev/docklet/internal/databases"
+	"github.com/monirujjaman-dev/docklet/internal/destinations"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/release"
+	"github.com/monirujjaman-dev/docklet/internal/s3"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
@@ -73,6 +75,9 @@ type Server struct {
 	dbsTune  func(*databases.Service)
 	cron     *cron.Service
 	updates  *updateChecker
+	dests    *destinations.Service
+	sbRunner selfBackupRunner
+	sbEvery  time.Duration
 	cronTune func(*cron.Service)
 	apps     *apps.Service
 	metrics  *metrics.Collector
@@ -140,6 +145,8 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 		cfg: cfg, log: log, st: st, box: box, now: time.Now,
 		prober: defaultProber, verifyTimeout: 90 * time.Second, verifyInterval: 3 * time.Second,
 		updates: &updateChecker{rel: release.New(cfg.ReleaseRepo)},
+		dests:   destinations.New(st, box),
+		sbEvery: 10 * time.Minute,
 	}
 	for _, o := range opts {
 		o(s)
@@ -170,6 +177,10 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 			s.dbs.SetClock(s.now)
 			s.dbs.EnsureNetwork = s.apps.EnsureNetwork
 			s.dbs.SealEnv = s.apps.SealEnv
+			s.dbs.Remote = func(ctx context.Context, id int64) (*s3.Client, error) {
+				c, _, err := s.dests.Client(ctx, id)
+				return c, err
+			}
 			if s.dbsTune != nil {
 				s.dbsTune(s.dbs)
 			}
@@ -253,6 +264,22 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
 	mux.HandleFunc("POST /api/system/backup", authed(s.handleSystemBackup))
+	mux.HandleFunc("GET /api/system/backup-schedule", authed(s.handleGetSelfBackupSchedule))
+	mux.HandleFunc("PUT /api/system/backup-schedule", authed(s.handlePutSelfBackupSchedule))
+	mux.HandleFunc("POST /api/system/backup-schedule/run", authed(s.handleRunSelfBackup))
+	mux.HandleFunc("GET /api/system/remote-backups", authed(s.handleListRemoteSelfBackups))
+	mux.HandleFunc("GET /api/destinations", authed(s.handleListDestinations))
+	mux.HandleFunc("POST /api/destinations", authed(s.handleCreateDestination))
+	mux.HandleFunc("POST /api/destinations/test", authed(s.handleTestDestinationInput))
+	mux.HandleFunc("PUT /api/destinations/{id}", authed(s.handleUpdateDestination))
+	mux.HandleFunc("POST /api/destinations/{id}/test", authed(s.handleTestDestination))
+	mux.HandleFunc("DELETE /api/destinations/{id}", authed(s.handleDeleteDestination))
+	mux.HandleFunc("PUT /api/databases/{id}/backup-destination", authed(s.handleDatabaseDestination))
+	mux.HandleFunc("POST /api/backups/{id}/upload", authed(s.handleUploadBackup))
+	mux.HandleFunc("POST /api/databases/{id}/users", authed(s.handleCreateDBUser))
+	mux.HandleFunc("GET /api/database-users/{id}/credentials", authed(s.handleDBUserCredentials))
+	mux.HandleFunc("PATCH /api/database-users/{id}", authed(s.handleUpdateDBUser))
+	mux.HandleFunc("DELETE /api/database-users/{id}", authed(s.handleDeleteDBUser))
 	mux.HandleFunc("GET /api/system/update", authed(s.handleUpdateCheck))
 	mux.HandleFunc("GET /api/apps/{id}/cron", authed(s.handleListCron))
 	mux.HandleFunc("POST /api/apps/{id}/cron", authed(s.handleCreateCron))
@@ -328,6 +355,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.dbs != nil {
 		go s.dbs.Run(ctx)
+	}
+	if s.cfg.DataDir != "" {
+		go s.runSelfBackupSchedule(ctx, s.sbEvery)
 	}
 	cronDone := make(chan struct{})
 	if s.cron != nil {
