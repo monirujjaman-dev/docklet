@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { api, type PanelState } from "../lib/api";
   import Field from "../lib/Field.svelte";
+  import SystemPanel from "../lib/SystemPanel.svelte";
 
   let panel = $state<PanelState | null>(null);
   let domain = $state("");
@@ -132,3 +133,5 @@
     </dl>
   {/if}
 </section>
+
+<SystemPanel />

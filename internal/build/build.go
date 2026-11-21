@@ -129,6 +129,23 @@ func ValidatePath(p string) error {
 	return nil
 }
 
+// InsideRepo resolves rel (symlinks included) under root and fails if the
+// result is outside root.
+func InsideRepo(root, rel string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	p, err := filepath.EvalSymlinks(filepath.Join(root, filepath.Clean(rel)))
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.Rel(realRoot, p); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", errors.New("points outside the repository (symlink)")
+	}
+	return p, nil
+}
+
 // Build clones spec.RepoURL at spec.Branch and builds spec.Tag. Every output
 // line goes to logf. Builds beyond the concurrency limit wait their turn.
 func (b *Builder) Build(ctx context.Context, spec Spec, logf func(string)) (Result, error) {
@@ -171,6 +188,8 @@ func (b *Builder) Build(ctx context.Context, spec Spec, logf func(string)) (Resu
 
 	env := []string{
 		"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/true",
+		// Only network transports: no ext::, file:// or fd:: via redirects or submodules.
+		"GIT_ALLOW_PROTOCOL=https:http:ssh",
 		"DOCKER_HOST=" + b.DockerHost, "DOCKER_BUILDKIT=1",
 	}
 	if IsSSH(spec.RepoURL) {
@@ -199,13 +218,21 @@ func (b *Builder) Build(ctx context.Context, spec Spec, logf func(string)) (Resu
 	res.CommitSHA, res.CommitMessage = sha, truncate(msg, 200)
 	logf(fmt.Sprintf("Commit %s: %s", shortSHA(sha), res.CommitMessage))
 
-	contextDir := filepath.Join(src, filepath.Clean(spec.Context))
-	dockerfile := filepath.Join(src, filepath.Clean(spec.Dockerfile))
+	// Resolve symlinks: a repository must not point the build at files
+	// outside its checkout (e.g. Docklet's data directory).
+	contextDir, err := InsideRepo(src, spec.Context)
+	if err != nil {
+		return res, fmt.Errorf("build context %q: %w", spec.Context, err)
+	}
 	if st, err := os.Stat(contextDir); err != nil || !st.IsDir() {
 		return res, fmt.Errorf("build context %q not found in the repository", spec.Context)
 	}
-	if _, err := os.Stat(dockerfile); err != nil {
-		return res, fmt.Errorf("%s not found in the repository (builds without a Dockerfile are not supported yet)", spec.Dockerfile)
+	dockerfile, err := InsideRepo(src, spec.Dockerfile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return res, fmt.Errorf("%s not found in the repository (builds without a Dockerfile are not supported yet)", spec.Dockerfile)
+		}
+		return res, fmt.Errorf("the Dockerfile path %q: %w", spec.Dockerfile, err)
 	}
 
 	args := []string{"build", "--progress=plain", "-t", spec.Tag, "-f", dockerfile}

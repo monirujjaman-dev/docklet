@@ -37,7 +37,8 @@ LABEL org.opencontainers.image.source="https://github.com/monirujjaman-dev/dockl
 # git, ssh and the docker CLI (with buildx) are used for Git builds.
 RUN apk add --no-cache ca-certificates tzdata git openssh-client docker-cli docker-cli-buildx
 COPY --from=build /out/docklet /usr/local/bin/docklet
-ENV DOCKLET_DATA_DIR=/var/lib/docklet
+ENV DOCKLET_DATA_DIR=/var/lib/docklet \
+    DOCKLET_CONTAINER=1
 VOLUME /var/lib/docklet
 EXPOSE 3000
 # Runs as root: it needs the Docker socket, which is root-equivalent anyway.

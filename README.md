@@ -3,7 +3,7 @@
 A lightweight, self-hosted PaaS for a single VPS, built directly on **Docker** and **Caddy**.
 One Go binary, SQLite, zero-config TLS, and a lean control plane so your server's RAM goes to your apps.
 
-> Status: **M5 — Git builds, webhooks and rollback**. Managed databases, workers and cron come next.
+> Status: **v1.0** — Docklet + Caddy idle at 63.5 MB RSS, vs 754 MB for Dokploy's control plane ([benchmarks](docs/benchmarks.md)).
 
 ## Goals
 
@@ -26,7 +26,7 @@ On a Linux server (installs Docker if needed, then Docklet + Caddy as containers
 curl -sSL https://raw.githubusercontent.com/monirujjaman-dev/docklet/main/install.sh | sudo sh
 ```
 
-See [docs/install.md](docs/install.md). To try it on Windows or macOS with Docker Desktop, see [docs/docker-desktop.md](docs/docker-desktop.md) (`docker compose up -d --build`).
+See [install](docs/install.md), [upgrade](docs/upgrade.md), [backup and restore](docs/backup.md), [troubleshooting](docs/troubleshooting.md) and [security](docs/security.md). To try it on Windows or macOS with Docker Desktop, see [docs/docker-desktop.md](docs/docker-desktop.md) (`docker compose up -d --build`).
 
 ## Development
 
@@ -137,7 +137,22 @@ Docklet manages [Caddy](https://caddyserver.com) through its Admin API (`-caddy-
 
 In **Settings → Panel domain**, enter a domain whose DNS points at the server (ports 80/443 open). Caddy gets a certificate, and Docklet checks that `https://<domain>` really reaches it. Only after that check passes does Docklet bind its port to `127.0.0.1`, so a DNS or firewall mistake can't lock you out. If the domain stops working later, run `docklet admin clear-panel-domain` and restart Docklet to get direct access back.
 
-The data directory holds `docklet.db` (SQLite) and `master.key`, which encrypts secrets at rest. Back up **both**: without the key, encrypted values such as 2FA secrets cannot be recovered.
+The data directory holds `docklet.db` (SQLite) and `master.key`, which encrypts secrets at rest. Back up **both** with **Settings → Back up Docklet** or `docklet backup` ([docs/backup.md](docs/backup.md)): without the key, encrypted values such as 2FA secrets cannot be recovered.
+
+### CLI
+
+```
+docklet serve                      run the control plane
+docklet backup [-o file]           encrypted backup of the database + master key (safe while running)
+docklet restore -i file [-check]   restore one (Docklet stopped); -check only verifies it
+docklet upgrade [-check]           binary installs: download the latest release, verify its checksum, swap
+docklet audit verify               check the audit log's hash chain
+docklet admin reset-password       reset a password (-disable-2fa to turn off 2FA)
+docklet admin clear-panel-domain   regain direct access if the panel domain broke
+docklet version
+```
+
+Releases (tag `vX.Y.Z`) publish static `docklet-linux-{amd64,arm64}` binaries with `checksums.txt`, and the image `ghcr.io/monirujjaman-dev/docklet:X.Y.Z`. `go run ./scripts/bench` checks the performance budgets ([docs/benchmarks.md](docs/benchmarks.md)).
 
 Opt-in integration tests: `DOCKLET_TEST_DOCKER=1 go test ./internal/docker/` (needs a local image `docklet-test/hello:v1` listening on 8080) and `DOCKLET_TEST_CADDY_ADMIN=http://localhost:2019 go test ./internal/caddy/`.
 
@@ -146,7 +161,7 @@ After editing SQL in `migrations/` or `internal/store/queries/`, run `make sqlc`
 ## Layout
 
 ```
-cmd/docklet/        CLI entrypoint (serve, audit verify, admin reset-password, version)
+cmd/docklet/        CLI entrypoint (serve, backup, restore, upgrade, audit verify, admin …, version)
 internal/server/    HTTP API, sessions, CSRF, rate limiting, panel domain, embedded SPA (dist/)
 internal/caddy/     Caddy config builder, Admin API client, reconciler
 internal/apps/      deploy pipeline (pull / build / rollback), job workers, lifecycle, Docker reconciler, image cleanup
@@ -157,6 +172,11 @@ internal/auth/      argon2id, TOTP (RFC 6238), tokens
 internal/audit/     append-only hash-chained audit log + verifier
 internal/secrets/   XChaCha20-Poly1305 encryption with the master key
 internal/store/     SQLite (WAL) + goose migrations; db/ is sqlc-generated
+internal/databases/ managed PostgreSQL / MySQL / MariaDB / Redis, backups and restore
+internal/cron/      cron parser and scheduler (one-off containers)
+internal/selfbackup/ encrypted export/restore of docklet.db + master.key, data-dir lock
+internal/release/   GitHub release lookup and checksum-verified binary install
+scripts/bench/      budget benchmark
 migrations/         SQL migrations (embedded)
 internal/version/   build metadata (set via -ldflags)
 web/                Svelte 5 dashboard (built into internal/server/dist)

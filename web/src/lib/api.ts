@@ -44,6 +44,47 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   return body as T;
 }
 
+// apiDownload POSTs json and saves the response body as a file.
+export async function apiDownload(path: string, json: unknown): Promise<string> {
+  const res = await fetch(`/api${path}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}) },
+    body: JSON.stringify(json),
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? msg;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, msg, {});
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "download";
+  const blob = await res.blob(); // fails if the server aborted mid-stream
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return name;
+}
+
+export type UpdateInfo = {
+  current: string;
+  latest?: string;
+  url?: string;
+  publishedAt?: string;
+  newer: boolean;
+  comparable: boolean;
+  inContainer: boolean;
+  checkedAt: number;
+  error?: string;
+  disabled?: boolean;
+};
+
 export type VersionInfo = {
   version: string;
   commit: string;

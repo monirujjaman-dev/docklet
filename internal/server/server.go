@@ -18,6 +18,7 @@ import (
 	"github.com/monirujjaman-dev/docklet/internal/cron"
 	"github.com/monirujjaman-dev/docklet/internal/databases"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
+	"github.com/monirujjaman-dev/docklet/internal/release"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
@@ -41,6 +42,12 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 	// BackupDir stores database backups (default: a "backups" dir next to the DB).
 	BackupDir string
+	// DataDir holds docklet.db and master.key; enables self-backup downloads.
+	DataDir string
+	// DisableUpdateCheck turns off the dashboard's "check for updates".
+	DisableUpdateCheck bool
+	// ReleaseRepo is the GitHub repository checked for releases.
+	ReleaseRepo string
 }
 
 // Server is the Docklet control-plane HTTP server.
@@ -65,6 +72,7 @@ type Server struct {
 	dbs      *databases.Service
 	dbsTune  func(*databases.Service)
 	cron     *cron.Service
+	updates  *updateChecker
 	cronTune func(*cron.Service)
 	apps     *apps.Service
 	metrics  *metrics.Collector
@@ -108,6 +116,11 @@ func WithDatabasesTuning(fn func(*databases.Service)) Option {
 	return func(s *Server) { s.dbsTune = fn }
 }
 
+// WithReleaseAPI points the update check at another GitHub API base (tests).
+func WithReleaseAPI(base string) Option {
+	return func(s *Server) { s.updates.rel.APIBase = base }
+}
+
 // WithCronTuning adjusts the cron service (tests).
 func WithCronTuning(fn func(*cron.Service)) Option {
 	return func(s *Server) { s.cronTune = fn }
@@ -126,6 +139,7 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 	s := &Server{
 		cfg: cfg, log: log, st: st, box: box, now: time.Now,
 		prober: defaultProber, verifyTimeout: 90 * time.Second, verifyInterval: 3 * time.Second,
+		updates: &updateChecker{rel: release.New(cfg.ReleaseRepo)},
 	}
 	for _, o := range opts {
 		o(s)
@@ -238,6 +252,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/rollback", authed(s.handleRollback))
 	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
+	mux.HandleFunc("POST /api/system/backup", authed(s.handleSystemBackup))
+	mux.HandleFunc("GET /api/system/update", authed(s.handleUpdateCheck))
 	mux.HandleFunc("GET /api/apps/{id}/cron", authed(s.handleListCron))
 	mux.HandleFunc("POST /api/apps/{id}/cron", authed(s.handleCreateCron))
 	mux.HandleFunc("POST /api/cron/preview", authed(s.handleCronPreview))
@@ -402,8 +418,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleVersion is public (for monitoring), so it reports only the release,
+// not the commit, build date or Go version.
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, version.Get())
+	writeJSON(w, http.StatusOK, map[string]string{"version": version.Version})
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -412,8 +430,18 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+		// Inline styles are needed by the charts; scripts are same-origin only.
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
+			"default-src 'self'; script-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
+				"connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		if isHTTPS(r) {
+			// Only over HTTPS (the panel domain): direct http://ip:3000 access
+			// before a domain is set must keep working.
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
