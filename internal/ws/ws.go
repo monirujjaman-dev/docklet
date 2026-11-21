@@ -174,7 +174,7 @@ func (c *Conn) readFrame() (fin bool, op byte, payload []byte, err error) {
 }
 
 // Write sends one message.
-func (c *Conn) Write(typ int, data []byte) error { return c.write(byte(typ), data) }
+func (c *Conn) Write(typ int, data []byte) error { return c.write(byte(typ&0x0f), data) }
 
 func (c *Conn) write(op byte, data []byte) error {
 	c.wm.Lock()
@@ -185,7 +185,7 @@ func (c *Conn) write(op byte, data []byte) error {
 	case n < 126:
 		hdr = append(hdr, byte(n))
 	case n <= 0xffff:
-		hdr = append(hdr, 126, byte(n>>8), byte(n))
+		hdr = binary.BigEndian.AppendUint16(append(hdr, 126), uint16(n)) //nolint:gosec // n <= 0xffff
 	default:
 		hdr = append(hdr, 127)
 		hdr = binary.BigEndian.AppendUint64(hdr, uint64(n))

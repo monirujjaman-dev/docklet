@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func (f *fakeDK) ContainerCreateRaw(_ context.Context, name string, body map[str
 		return "", errors.New("name in use")
 	}
 	f.n++
-	id := "new" + string(rune('0'+f.n))
+	id := fmt.Sprintf("new%d", f.n)
 	f.names[name] = id
 	f.created[id] = body
 	img, _ := body["Image"].(string)

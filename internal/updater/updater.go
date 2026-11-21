@@ -576,5 +576,5 @@ func pinVersion(envFile, v string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(envFile, []byte(strings.Join(out, "\n")+"\n"), fi.Mode().Perm())
+	return os.WriteFile(envFile, []byte(strings.Join(out, "\n")+"\n"), fi.Mode().Perm()) //nolint:gosec // the -env-file flag, set by Docklet
 }

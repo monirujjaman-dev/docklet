@@ -20,7 +20,7 @@ func clientFrame(op byte, payload []byte) []byte {
 	case n < 126:
 		b = append(b, 0x80|byte(n))
 	case n <= 0xffff:
-		b = append(b, 0x80|126, byte(n>>8), byte(n))
+		b = binary.BigEndian.AppendUint16(append(b, 0x80|126), uint16(n)) //nolint:gosec // n <= 0xffff
 	default:
 		b = append(b, 0x80|127)
 		b = binary.BigEndian.AppendUint64(b, uint64(n))
