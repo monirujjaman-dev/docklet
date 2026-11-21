@@ -42,6 +42,8 @@ func fakeEngine(dataFile func(cmd []string) string) dockertest.ExecFunc {
 			case strings.Contains(joined, "--rdb"):
 				b, _ := f.ReadFile(id, data())
 				_ = f.WriteFile(id, cmd[len(cmd)-1], b)
+			case strings.HasSuffix(joined, "INFO persistence"):
+				_, _ = stdout.Write([]byte("# Persistence\r\naof_rewrite_in_progress:0\r\naof_rewrite_scheduled:0\r\naof_last_bgrewrite_status:ok\r\n"))
 			case strings.Contains(joined, "DEBUG RELOAD"):
 				b, _ := f.ReadFile(id, "/data/dump.rdb")
 				_ = f.WriteFile(id, "/data/data", b)

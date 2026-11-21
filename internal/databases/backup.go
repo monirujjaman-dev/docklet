@@ -299,9 +299,47 @@ func (s *Service) load(ctx context.Context, d db.Database, b db.Backup) error {
 		if err := s.execTo(ctx, d.ContainerID, []string{"redis-cli", "--no-auth-warning", "DEBUG", "RELOAD", "NOSAVE"}, env, io.Discard); err != nil {
 			return err
 		}
-		return s.execTo(ctx, d.ContainerID, []string{"redis-cli", "--no-auth-warning", "BGREWRITEAOF"}, env, io.Discard)
+		if err := s.execTo(ctx, d.ContainerID, []string{"redis-cli", "--no-auth-warning", "BGREWRITEAOF"}, env, io.Discard); err != nil {
+			return err
+		}
+		// The rewrite runs in the background. Until it finishes, the AOF on
+		// disk still ends with whatever was there before (e.g. a FLUSHALL),
+		// so a restart would bring that state back. Wait for it.
+		return s.waitAOFRewrite(ctx, d.ContainerID, env)
 	}
 	return fmt.Errorf("restore is not supported for %s", d.Engine)
+}
+
+// waitAOFRewrite polls INFO persistence until no AOF rewrite is running or
+// scheduled, and reports a failed rewrite.
+func (s *Service) waitAOFRewrite(ctx context.Context, id string, env []string) error {
+	deadline := s.now().Add(s.ReadyTimeout)
+	for {
+		var out strings.Builder
+		if err := s.execTo(ctx, id, []string{"redis-cli", "--no-auth-warning", "INFO", "persistence"}, env, &out); err != nil {
+			return err
+		}
+		info := map[string]string{}
+		for _, line := range strings.Split(out.String(), "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+				info[k] = v
+			}
+		}
+		if info["aof_rewrite_in_progress"] == "0" && info["aof_rewrite_scheduled"] == "0" {
+			if st := info["aof_last_bgrewrite_status"]; st != "" && st != "ok" {
+				return fmt.Errorf("redis AOF rewrite failed (%s)", st)
+			}
+			return nil
+		}
+		if s.now().After(deadline) {
+			return errors.New("timed out waiting for the redis AOF rewrite")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(s.ReadyInterval):
+		}
+	}
 }
 
 // RunScheduled takes due scheduled backups, one database at a time.

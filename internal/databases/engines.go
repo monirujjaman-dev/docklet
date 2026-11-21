@@ -113,7 +113,9 @@ func (e *Engine) URL(host string, c Creds) string {
 	u := url.URL{Scheme: e.scheme, Host: fmt.Sprintf("%s:%d", host, e.Port)}
 	switch e.Name {
 	case "redis":
-		u.User = url.UserPassword("", c.Password)
+		// "default" is Redis's built-in ACL user; an empty username makes
+		// some clients (redis-cli among them) send AUTH "" <pw>, which fails.
+		u.User = url.UserPassword("default", c.Password)
 		u.Path = "/0"
 	case "postgres":
 		u.User = url.UserPassword(c.User, c.Password)
