@@ -122,6 +122,19 @@ An app is either a **web service** (gets domains and HTTPS through Caddy) or a *
 
 Creating, changing, deleting, running and cancelling jobs is audited. Scheduled runs are not audited, but each one appears in the run history.
 
+### Server
+
+**Server** manages the host itself, through short-lived privileged helper containers (no agent to install):
+
+- host name, time zone, swap file and swappiness;
+- disk cleanup with a preview (deployment images, Docklet's containers and volumes are protected);
+- reboot (typed confirmation);
+- listening ports mapped to apps and databases;
+- processes;
+- systemd services with logs.
+
+Changes need Ubuntu or Debian with systemd; other hosts are read-only. See [docs/server.md](docs/server.md).
+
 ### Monitoring
 
 **Monitoring** shows live host CPU, memory, disk and network (sampled every 2 s) and a per-app table. Each app also has a **Metrics** tab. Live views cover the last 30 minutes and stream over SSE; the 1 h, 6 h, 24 h and 7 d views come from one-minute averages stored in SQLite (kept for `-metrics-retention-days`, default 7). Partial minutes are written on shutdown, so a restart loses no history.
