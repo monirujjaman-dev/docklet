@@ -60,6 +60,7 @@ sqlc:
 release: web
 	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o bin/$(BINARY)-linux-amd64 ./cmd/docklet
 	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o bin/$(BINARY)-linux-arm64 ./cmd/docklet
+	cd bin && sha256sum $(BINARY)-linux-amd64 $(BINARY)-linux-arm64 > checksums.txt
 
 clean:
 	rm -rf bin

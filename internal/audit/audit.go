@@ -85,6 +85,8 @@ const (
 	ActionCronDeleted      = "cron.deleted"
 	ActionCronRunRequested = "cron.run_requested"
 	ActionCronRunCancelled = "cron.run_cancelled"
+
+	ActionSystemBackup = "system.backup_downloaded"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

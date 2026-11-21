@@ -6,7 +6,8 @@
 # Re-running it upgrades to the latest image and keeps your data and settings.
 #
 # Environment overrides (put them after "sudo", e.g. "| sudo DOCKLET_PORT=3100 sh"):
-#   DOCKLET_VERSION     image tag to install (default: main)
+#   DOCKLET_VERSION     image tag to install: a release such as 1.0.0, or "main"
+#                       for the development branch (default: the latest release)
 #   DOCKLET_DIR         install directory (default: /opt/docklet)
 #   DOCKLET_PORT        dashboard port (default: 3000)
 #   DOCKLET_HTTP_PORT   Caddy HTTP port (default: 80)
@@ -15,7 +16,7 @@
 set -eu
 
 REPO="${DOCKLET_REPO:-monirujjaman-dev/docklet}"
-VERSION="${DOCKLET_VERSION:-main}"
+REQUESTED_VERSION="${DOCKLET_VERSION:-}"
 DIR="${DOCKLET_DIR:-/opt/docklet}"
 PORT="${DOCKLET_PORT:-3000}"
 HTTP_PORT="${DOCKLET_HTTP_PORT:-80}"
@@ -106,9 +107,38 @@ for net in $(docker network ls -q); do
 	fi
 done
 
+# --- Version ------------------------------------------------------------------
+
+# The newest published release as an image tag ("v1.2.3" -> "1.2.3"), or
+# nothing if there is none yet or GitHub can't be reached.
+latest_release() {
+	curl -fsSL --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
+		sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9][0-9.]*\)".*/\1/p' | head -n 1
+}
+is_release() { echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; }
+
+CURRENT_VERSION=""
+[ -f "$DIR/.env" ] && CURRENT_VERSION="$(sed -n 's/^DOCKLET_VERSION=//p' "$DIR/.env")"
+if [ -n "$REQUESTED_VERSION" ]; then
+	VERSION="$REQUESTED_VERSION"
+elif [ -n "$CURRENT_VERSION" ] && ! is_release "$CURRENT_VERSION"; then
+	VERSION="$CURRENT_VERSION" # a channel such as "main" stays on that channel
+else
+	VERSION="$(latest_release)"
+	if [ -z "$VERSION" ]; then
+		VERSION="${CURRENT_VERSION:-main}"
+		warn "could not find a published release; using '$VERSION'"
+	fi
+fi
+DOCKLET_VERSION="$VERSION"
+
 # --- Files --------------------------------------------------------------------
 
-info "Installing Docklet ($VERSION) into $DIR"
+if [ "$existing" -eq 1 ]; then
+	info "Upgrading Docklet in $DIR: ${CURRENT_VERSION:-unknown} -> $VERSION"
+else
+	info "Installing Docklet ($VERSION) into $DIR"
+fi
 mkdir -p "$DIR/deploy/caddy"
 fetch() { # fetch <repo path> <destination>
 	if [ -n "${DOCKLET_SOURCE_DIR:-}" ]; then
@@ -156,6 +186,30 @@ if [ "${DOCKLET_NO_PULL:-0}" != "1" ]; then
 	info "Pulling images"
 	docker compose pull --quiet || die "could not pull images (is ghcr.io reachable and the package public?)"
 fi
+
+# Before upgrading, stop Docklet briefly and back up its database and key
+# with the new image (sites keep running: Caddy holds their routes). The
+# backup stays in the data volume, next to the key it contains.
+BACKUP_NOTE=""
+if [ "$existing" -eq 1 ] && [ "${DOCKLET_SKIP_BACKUP:-0}" != "1" ]; then
+	stamp="$(date -u +%Y%m%d-%H%M%S)"
+	file="/var/lib/docklet/self-backups/pre-upgrade-${stamp}.tar.gz"
+	image="$(docker compose config --images | grep -v '^caddy' | head -n 1)"
+	volume="$(docker volume ls -q --filter label=com.docker.compose.project=docklet --filter label=com.docker.compose.volume=docklet-data | head -n 1)"
+	[ -n "$image" ] && [ -n "$volume" ] || die "could not find the Docklet image or data volume"
+	backup() { docker run --rm --network none -v "$volume:/var/lib/docklet" "$@"; }
+	info "Backing up Docklet's database before the upgrade"
+	docker compose stop docklet >/dev/null 2>&1 || true
+	if backup "$image" backup -no-encrypt -o "$file" >/dev/null; then
+		BACKUP_NOTE="Pre-upgrade backup: $file (in the docklet-data volume)"
+		# Keep the three newest pre-upgrade backups.
+		backup --entrypoint sh "$image" -c \
+			'ls -1t /var/lib/docklet/self-backups/pre-upgrade-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f' >/dev/null 2>&1 || true
+	else
+		docker compose start docklet >/dev/null 2>&1 || true
+		die "the pre-upgrade backup failed, so nothing was changed (set DOCKLET_SKIP_BACKUP=1 to upgrade anyway)"
+	fi
+fi
 info "Starting containers"
 docker compose up -d --no-build --remove-orphans
 
@@ -188,3 +242,11 @@ Next steps:
 
 Upgrade: re-run this installer.   Logs: cd ${DIR} && docker compose logs -f docklet
 EOF
+if [ -n "$BACKUP_NOTE" ]; then
+	cat <<EOF
+
+${BACKUP_NOTE}
+To roll back: set DOCKLET_VERSION=${CURRENT_VERSION} in ${DIR}/.env, run 'docker compose up -d',
+and if Docklet then fails to start, restore that backup (docs/upgrade.md).
+EOF
+fi

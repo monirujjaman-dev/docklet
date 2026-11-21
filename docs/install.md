@@ -27,8 +27,9 @@ until it exists, anyone who can reach that port can claim it.
 4. Pulls `ghcr.io/monirujjaman-dev/docklet` and `caddy`, starts both, and
    waits for the health check.
 
-Re-running the same command **upgrades** to the newest image. Data
-(`docklet-data`, `caddy-data` volumes) and `.env` are kept.
+Re-running the same command **upgrades** to the newest release, after an
+automatic backup. Data (`docklet-data`, `caddy-data` volumes) and `.env` are
+kept. See [upgrade.md](upgrade.md).
 
 ## Options
 
@@ -36,16 +37,17 @@ Pass them after `sudo`:
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/monirujjaman-dev/docklet/main/install.sh \
-  | sudo DOCKLET_PORT=3100 DOCKLET_VERSION=main sh
+  | sudo DOCKLET_PORT=3100 DOCKLET_VERSION=1.0.0 sh
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DOCKLET_VERSION` | `main` | Image tag (`main`, `sha-abc1234`, later `1.0.0`) |
+| `DOCKLET_VERSION` | latest release | Image tag: a release (`1.0.0`), or `main` for the development branch |
 | `DOCKLET_DIR` | `/opt/docklet` | Where `compose.yaml` and `.env` live |
 | `DOCKLET_PORT` | `3000` | Dashboard port |
 | `DOCKLET_HTTP_PORT` / `DOCKLET_HTTPS_PORT` | `80` / `443` | Caddy ports |
 | `DOCKLET_SKIP_PORT_CHECK` | unset | `1` installs even if a port looks busy |
+| `DOCKLET_SKIP_BACKUP` | unset | `1` skips the pre-upgrade backup |
 
 Values you pass are saved to `.env`, so later upgrades keep them.
 
@@ -90,13 +92,11 @@ docker compose exec docklet docklet admin reset-password -username admin
 docker compose exec docklet docklet admin clear-panel-domain     # then: docker compose restart docklet
 ```
 
-Back up the `docklet-data` volume: it holds `docklet.db` **and** `master.key`.
-Without the key, encrypted env vars and 2FA secrets can't be recovered.
-
-```sh
-docker run --rm -v docklet_docklet-data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/docklet-data-$(date +%F).tgz -C /data .
-```
+Back up Docklet itself from **Settings → Back up Docklet**, or with
+`docklet backup` ([backup.md](backup.md)). The backup holds `docklet.db`
+**and** `master.key`: without the key, encrypted env vars and 2FA secrets
+can't be recovered. If something goes wrong, see
+[troubleshooting.md](troubleshooting.md).
 
 ## Uninstall
 

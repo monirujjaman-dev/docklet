@@ -180,3 +180,20 @@ func TestRealBuild(t *testing.T) {
 	}
 	_ = exec.Command("docker", "rmi", "docklet-test/built:1").Run()
 }
+
+func TestInsideRepoRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	_ = os.WriteFile(filepath.Join(outside, "master.key"), []byte("secret"), 0o600)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0o700)
+	_ = os.WriteFile(filepath.Join(root, "app", "Dockerfile"), []byte("FROM scratch"), 0o600)
+	_ = os.Symlink(outside, filepath.Join(root, "ctx"))
+	_ = os.Symlink(filepath.Join(outside, "master.key"), filepath.Join(root, "Dockerfile"))
+	_ = os.Symlink("app/Dockerfile", filepath.Join(root, "Dockerfile.ok"))
+	for rel, ok := range map[string]bool{"app": true, "app/Dockerfile": true, "Dockerfile.ok": true, ".": true, "ctx": false, "Dockerfile": false, "ctx/master.key": false} {
+		_, err := InsideRepo(root, rel)
+		if (err == nil) != ok {
+			t.Errorf("InsideRepo(%q) err = %v, want ok=%v", rel, err, ok)
+		}
+	}
+}

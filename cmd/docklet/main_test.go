@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/monirujjaman-dev/docklet/internal/auth"
+	"github.com/monirujjaman-dev/docklet/internal/selfbackup"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/store/db"
 )
@@ -140,5 +143,58 @@ func TestParsePrefixes(t *testing.T) {
 	}
 	if _, err := parsePrefixes("nope"); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestBackupRestoreCLI(t *testing.T) {
+	src := t.TempDir()
+	st, err := store.Open(context.Background(), dbPath(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = st.Q.CreateProject(context.Background(), db.CreateProjectParams{Name: "keepme", CreatedAt: 1})
+	_ = st.Close()
+	_ = os.WriteFile(keyPath(src), bytes.Repeat([]byte{4}, 32), 0o600)
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"backup", "-data-dir", src}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "DOCKLET_BACKUP_PASSPHRASE") {
+		t.Fatalf("unencrypted without -no-encrypt: %d %s", code, errb.String())
+	}
+	t.Setenv("DOCKLET_BACKUP_PASSPHRASE", "short")
+	if code := run([]string{"backup", "-data-dir", src}, &out, &errb); code != 2 {
+		t.Fatalf("short passphrase accepted: %d", code)
+	}
+	t.Setenv("DOCKLET_BACKUP_PASSPHRASE", "a long enough passphrase")
+	file := filepath.Join(t.TempDir(), "b.dkbackup")
+	out.Reset()
+	if code := run([]string{"backup", "-data-dir", src, "-o", file}, &out, &errb); code != 0 || !strings.Contains(out.String(), "encrypted") {
+		t.Fatalf("backup: %d %s %s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"restore", "-check", "-i", file}, &out, &errb); code != 0 || !strings.Contains(out.String(), "checksums match") {
+		t.Fatalf("check: %d %s %s", code, out.String(), errb.String())
+	}
+
+	dst := t.TempDir()
+	unlock, err := selfbackup.Lock(dst) // as a running server would
+	if err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	if code := run([]string{"restore", "-data-dir", dst, "-i", file}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "Docklet running") {
+		t.Fatalf("restore under a running server: %d %s", code, errb.String())
+	}
+	unlock()
+	out.Reset()
+	if code := run([]string{"restore", "-data-dir", dst, "-i", file}, &out, &errb); code != 0 {
+		t.Fatalf("restore: %d %s", code, errb.String())
+	}
+	rs, err := store.Open(context.Background(), dbPath(dst))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rs.Close() }()
+	if ps, _ := rs.Q.ListProjects(context.Background()); len(ps) != 1 || ps[0].Name != "keepme" {
+		t.Fatalf("projects = %v", ps)
 	}
 }

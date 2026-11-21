@@ -52,8 +52,8 @@ func TestVersion(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["version"] == "" {
-		t.Fatal("version is empty")
+	if body["version"] == "" || len(body) != 1 {
+		t.Fatalf("public version endpoint = %v", body)
 	}
 }
 
@@ -97,10 +97,30 @@ func TestSecurityHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeBody(t, res)
-	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Content-Security-Policy"} {
+	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Content-Security-Policy", "Cross-Origin-Opener-Policy", "Permissions-Policy"} {
 		if res.Header.Get(h) == "" {
 			t.Errorf("missing header %s", h)
 		}
+	}
+	csp := res.Header.Get("Content-Security-Policy")
+	for _, d := range []string{"script-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, d) {
+			t.Errorf("CSP lacks %q: %s", d, csp)
+		}
+	}
+	if res.Header.Get("Strict-Transport-Security") != "" {
+		t.Error("HSTS sent over plain HTTP")
+	}
+	// Behind Caddy (a trusted proxy on loopback) over HTTPS: HSTS is sent.
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeBody(t, res)
+	if !strings.HasPrefix(res.Header.Get("Strict-Transport-Security"), "max-age=") {
+		t.Error("HSTS missing over HTTPS")
 	}
 }
 

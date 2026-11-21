@@ -22,7 +22,9 @@ import (
 	"github.com/monirujjaman-dev/docklet/internal/build"
 	"github.com/monirujjaman-dev/docklet/internal/docker"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
+	"github.com/monirujjaman-dev/docklet/internal/release"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
+	"github.com/monirujjaman-dev/docklet/internal/selfbackup"
 	"github.com/monirujjaman-dev/docklet/internal/server"
 	"github.com/monirujjaman-dev/docklet/internal/store"
 	"github.com/monirujjaman-dev/docklet/internal/version"
@@ -32,6 +34,9 @@ const usage = `Usage: docklet <command> [flags]
 
 Commands:
   serve                  Run the control plane
+  backup                 Back up Docklet's database and master key
+  restore                Restore a backup (Docklet must be stopped)
+  upgrade                Upgrade a binary install to the latest release
   audit verify           Verify the audit log hash chain (exit 1 if broken)
   admin reset-password   Reset a user's password and unlock the account
   admin clear-panel-domain
@@ -56,6 +61,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "serve":
 		return cmdServe(args[1:], stderr)
+	case "backup":
+		return cmdBackup(args[1:], stdout, stderr)
+	case "restore":
+		return cmdRestore(args[1:], stdout, stderr)
+	case "upgrade":
+		return cmdUpgrade(args[1:], stdout, stderr)
 	case "audit":
 		if len(args) > 1 && args[1] == "verify" {
 			return cmdAuditVerify(args[2:], stdout, stderr)
@@ -109,6 +120,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 		"days of one-minute metrics to keep; 0 disables metrics (env DOCKLET_METRICS_RETENTION_DAYS)")
 	buildTimeout := fs.Duration("build-timeout", envDuration("DOCKLET_BUILD_TIMEOUT", 20*time.Minute),
 		"maximum time for one Git build (env DOCKLET_BUILD_TIMEOUT)")
+	noUpdateCheck := fs.Bool("no-update-check", envOr("DOCKLET_UPDATE_CHECK", "on") == "off",
+		"never contact GitHub to check for new releases (env DOCKLET_UPDATE_CHECK=off)")
 	logLevel := fs.String("log-level", envOr("DOCKLET_LOG_LEVEL", "info"), "debug|info|warn|error (env DOCKLET_LOG_LEVEL)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -124,6 +137,13 @@ func cmdServe(args []string, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	unlock, err := selfbackup.Lock(*dataDir)
+	if err != nil {
+		log.Error("data directory", "dir", *dataDir, "err", err)
+		return 1
+	}
+	defer unlock()
 
 	key, err := secrets.LoadOrCreateKey(keyPath(*dataDir))
 	if err != nil {
@@ -149,7 +169,8 @@ func cmdServe(args []string, stderr io.Writer) int {
 	}
 	cfg := server.Config{
 		Addr: *addr, CaddyAdmin: *caddyAdmin, PanelUpstream: *panelUpstream, TrustedProxies: proxies,
-		BackupDir: filepath.Join(*dataDir, "backups"),
+		BackupDir: filepath.Join(*dataDir, "backups"), DataDir: *dataDir,
+		DisableUpdateCheck: *noUpdateCheck, ReleaseRepo: envOr("DOCKLET_RELEASE_REPO", release.DefaultRepo),
 	}
 	if *caddyAdmin == "off" {
 		cfg.CaddyAdmin = ""
