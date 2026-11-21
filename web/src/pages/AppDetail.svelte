@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { api, type AppDetail, type Deployment } from "../lib/api";
-  import { router } from "../lib/router.svelte";
+  import { link, router } from "../lib/router.svelte";
   import { parseEnv } from "../lib/env";
   import StatusBadge from "../lib/StatusBadge.svelte";
   import MetricsPanel from "../lib/MetricsPanel.svelte";
@@ -231,6 +231,7 @@
         <StatusBadge status={app.runtimeStatus} />
         {#if app.kind === "worker"}<span class="text-xs rounded-full px-2 py-0.5 bg-neutral-800 text-neutral-300">worker</span>{/if}
         {#if inProgress}<StatusBadge status="pending" />{/if}
+        {#if app.runtimeStatus === "running"}<a href="/terminal?kind=app&id={app.id}" use:link class="text-xs font-normal text-neutral-400 hover:text-white border border-neutral-700 rounded px-2 py-0.5">Terminal</a>{/if}
       </h1>
       {#if app.sourceType === "git" && app.git}
         <p class="text-xs text-neutral-500 font-mono mt-1">{app.git.url} · {app.git.branch}</p>

@@ -18,6 +18,7 @@ import (
 	"github.com/monirujjaman-dev/docklet/internal/cron"
 	"github.com/monirujjaman-dev/docklet/internal/databases"
 	"github.com/monirujjaman-dev/docklet/internal/destinations"
+	"github.com/monirujjaman-dev/docklet/internal/host"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/release"
 	"github.com/monirujjaman-dev/docklet/internal/s3"
@@ -79,10 +80,14 @@ type Server struct {
 	sbRunner selfBackupRunner
 	host     hostState
 	sec      securityState
-	sbEvery  time.Duration
-	cronTune func(*cron.Service)
-	apps     *apps.Service
-	metrics  *metrics.Collector
+	term     terminalState
+	selfUpd  selfUpdateState
+	// filesContent overrides how file contents move (tests).
+	filesContent host.Content
+	sbEvery      time.Duration
+	cronTune     func(*cron.Service)
+	apps         *apps.Service
+	metrics      *metrics.Collector
 
 	runCtx         context.Context
 	prober         func(ctx context.Context, url string) (string, error)
@@ -280,6 +285,16 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/server/services/{unit}/logs", authed(s.handleServerServiceLogs))
 	mux.HandleFunc("GET /api/server/cleanup", authed(s.handleServerCleanupPreview))
 	mux.HandleFunc("POST /api/server/cleanup", authed(s.handleServerCleanup))
+	mux.HandleFunc("POST /api/auth/reauth", authed(s.handleReauth))
+	mux.HandleFunc("POST /api/terminal/sessions", authed(s.handleTerminalTicket))
+	mux.HandleFunc("GET /api/files/roots", authed(s.handleFileRoots))
+	mux.HandleFunc("GET /api/files/list", authed(s.handleFileList))
+	mux.HandleFunc("GET /api/files/read", authed(s.handleFileRead))
+	mux.HandleFunc("PUT /api/files/write", authed(s.handleFileWrite))
+	mux.HandleFunc("POST /api/files/upload", authed(s.handleFileUpload))
+	mux.HandleFunc("GET /api/files/download", authed(s.handleFileDownload))
+	mux.HandleFunc("POST /api/files/op/{op}", authed(s.handleFileOp))
+	mux.HandleFunc("GET /api/terminal/ws", s.handleTerminalWS)
 	mux.HandleFunc("GET /api/server/security/pending", authed(s.handleSecurityPending))
 	mux.HandleFunc("POST /api/server/security/pending/confirm", authed(s.handleSecurityConfirm))
 	mux.HandleFunc("POST /api/server/security/pending/undo", authed(s.handleSecurityUndo))
@@ -317,6 +332,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/database-users/{id}", authed(s.handleUpdateDBUser))
 	mux.HandleFunc("DELETE /api/database-users/{id}", authed(s.handleDeleteDBUser))
 	mux.HandleFunc("GET /api/system/update", authed(s.handleUpdateCheck))
+	mux.HandleFunc("GET /api/system/update/status", authed(s.handleUpdateStatus))
+	mux.HandleFunc("POST /api/system/update/start", authed(s.handleUpdateStart))
+	mux.HandleFunc("PUT /api/system/update/auto", authed(s.handleUpdateAuto))
 	mux.HandleFunc("GET /api/apps/{id}/cron", authed(s.handleListCron))
 	mux.HandleFunc("POST /api/apps/{id}/cron", authed(s.handleCreateCron))
 	mux.HandleFunc("POST /api/cron/preview", authed(s.handleCronPreview))
@@ -395,6 +413,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.cfg.DataDir != "" {
 		go s.runSelfBackupSchedule(ctx, s.sbEvery)
+		if release.InContainer() && s.docker != nil {
+			go s.runAutoUpdate(ctx)
+		}
 	}
 	cronDone := make(chan struct{})
 	if s.cron != nil {

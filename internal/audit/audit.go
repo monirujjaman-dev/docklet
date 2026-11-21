@@ -119,6 +119,22 @@ const (
 	ActionServerUnban               = "server.ip_unbanned"
 	ActionDatabaseAllowlist         = "database.allowlist_changed"
 
+	ActionTerminalStarted = "terminal.session_started"
+	ActionTerminalEnded   = "terminal.session_ended"
+
+	ActionFileWritten    = "files.written"
+	ActionFileUploaded   = "files.uploaded"
+	ActionFileDownloaded = "files.downloaded"
+	ActionFileMkdir      = "files.folder_created"
+	ActionFileRenamed    = "files.renamed"
+	ActionFileMoved      = "files.moved"
+	ActionFileDeleted    = "files.deleted"
+	ActionFileChmod      = "files.mode_changed"
+	ActionFileChown      = "files.owner_changed"
+
+	ActionUpdateStarted = "docklet.update_started"
+	ActionUpdateAuto    = "docklet.auto_update_changed"
+
 	ActionCronCreated      = "cron.created"
 	ActionCronUpdated      = "cron.updated"
 	ActionCronDeleted      = "cron.deleted"

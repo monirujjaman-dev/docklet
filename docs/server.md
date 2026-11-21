@@ -111,6 +111,47 @@ On a database's page, after you publish a port, **Allowed sources** takes IPv4 a
 
 Change the SSH port first, then save the Fail2Ban settings again so the jail watches the new port.
 
+## Terminal
+
+**Terminal** opens a shell in the browser (xterm.js, loaded only when you open the page) over a WebSocket.
+
+| Target | How |
+|---|---|
+| Server | A root login shell (`bash -l`, or `sh`) on the host, in a helper container that `nsenter`s the host's namespaces with a TTY |
+| App or database | `docker exec` of a shell in its running container (also from the **Terminal** button on the app or database page) |
+
+- Colours, `htop`, `vim` and resizing work (`TERM=xterm-256color`). Copy by selecting text; paste with Ctrl/Cmd+V.
+- **Recent login:** opening a terminal needs a login (or a re-entered password) from the last 10 minutes.
+- **One-time tickets:** the browser first gets a ticket valid for one minute, then opens `/api/terminal/ws`. Connections from other origins are refused.
+- **Ending the session:** closing the tab, disconnecting or 30 minutes without input ends the shell.
+  - Server: the helper container is stopped, which ends everything started in it.
+  - App or database: the shell gets SIGHUP and then SIGKILL, because a closed `docker exec` stream doesn't end the process by itself.
+- At most 8 terminals are open at once.
+- The start and end of a session (target, duration, why it ended) are written to the audit log. What you type is not recorded.
+
+## Files
+
+**Files** browses the server (`/`) and every local Docker volume, such as a database's data volume or Docklet's own.
+
+- **Browse:** folders first, with size, mode, owner and modified time. Symlinks show their target.
+- **Edit:** text files up to 1 MB (UTF-8, no NUL bytes). Saving:
+  - keeps the file's mode and owner;
+  - writes a temporary file next to it and renames it over the original;
+  - is refused if the file changed since you opened it (sha256 check).
+- **Upload / download:**
+  - uploads up to 1 GB, streamed, with a free-space check; a new file gets the owner of its folder;
+  - a file downloads as itself, a folder as a `.tar`.
+- **Other changes:** new folder or file, rename, move, delete (asks for confirmation), mode (`chmod`) and owner (`chown`), optionally recursive.
+- **Safety:**
+  - Every path is resolved on the host with `realpath`. In a volume, `../` and symlinks can't leave the volume's folder; a symlink pointing out of it is refused.
+  - Deleting a symlink removes the link, never its target.
+  - System folders (`/`, `/etc`, `/usr`, `/var/lib/docker`, …) can't be deleted, moved, renamed or have their mode/owner changed. Nothing under `/proc`, `/sys` or `/dev` can be written.
+  - Editing in `/etc`, `/boot`, `/usr` and similar places shows a warning.
+- File changes need a login or a re-entered password from the last 10 minutes.
+- Every change and every download is audited (path, sizes, sha256).
+
+File contents go through Docker's archive API on a helper container that bind-mounts only the target folder and is never started. So large files never pass through a shell, and memory use stays flat: a 500 MB upload and download used under 10 MB.
+
 ## What is protected
 
 - **Disk cleanup never removes:**

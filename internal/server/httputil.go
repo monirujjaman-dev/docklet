@@ -48,13 +48,19 @@ func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 }
 
+// errAlreadyWritten ends a handler whose response has started (a stream).
+var errAlreadyWritten = errors.New("response already written")
+
 // readJSON decodes a JSON request body strictly.
-func readJSON(r *http.Request, dst any) error {
+func readJSON(r *http.Request, dst any) error { return readJSONMax(r, dst, maxJSONBody) }
+
+// readJSONMax is readJSON with a custom size limit.
+func readJSONMax(r *http.Request, dst any, max int64) error {
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != "application/json" {
 		return errf(http.StatusUnsupportedMediaType, "content-type must be application/json")
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxJSONBody))
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, max))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return errf(http.StatusBadRequest, "invalid JSON body")
@@ -65,7 +71,7 @@ func readJSON(r *http.Request, dst any) error {
 // handler adapts error-returning handlers.
 func (s *Server) handler(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := fn(w, r); err != nil {
+		if err := fn(w, r); err != nil && !errors.Is(err, errAlreadyWritten) {
 			s.writeErr(w, r, err)
 		}
 	}

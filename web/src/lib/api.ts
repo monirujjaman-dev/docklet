@@ -17,6 +17,10 @@ export function setCsrfToken(token: string) {
   csrfToken = token;
 }
 
+export function getCsrfToken() {
+  return csrfToken;
+}
+
 export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = init;
   const method = (rest.method ?? (json !== undefined ? "POST" : "GET")).toUpperCase();

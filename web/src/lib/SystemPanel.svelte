@@ -1,4 +1,5 @@
 <script lang="ts">
+  import UpdatePanel from "./UpdatePanel.svelte";
   import { onMount } from "svelte";
   import { api, apiDownload, type Destination, type SelfBackupPolicy, type UpdateInfo } from "./api";
 
@@ -208,9 +209,12 @@
     {:else}
       <p class="text-sm text-neutral-400">This is a development build ({upd.current}), so it can't be compared with releases.</p>
     {/if}
-    {#if upd.newer || !upd.comparable}
-      <p class="text-xs text-neutral-500">{upd.inContainer ? "To upgrade, run on the server:" : "To upgrade this binary install, run:"}</p>
-      <pre class="rounded-md bg-neutral-900 border border-neutral-800 p-2 text-xs font-mono overflow-x-auto select-all">{upd.inContainer ? installCmd : "sudo docklet upgrade -restart"}</pre>
+    {#if upd.inContainer}
+      <UpdatePanel {upd} />
+      <p class="text-xs text-neutral-500">Or upgrade from a shell on the server: <span class="font-mono select-all">{installCmd}</span></p>
+    {:else if upd.newer || !upd.comparable}
+      <p class="text-xs text-neutral-500">To upgrade this binary install, run:</p>
+      <pre class="rounded-md bg-neutral-900 border border-neutral-800 p-2 text-xs font-mono overflow-x-auto select-all">sudo docklet upgrade -restart</pre>
     {/if}
     <button onclick={() => checkUpdates(true)} disabled={checking} class="text-xs text-neutral-400 hover:text-white">{checking ? "Checking…" : "Check again"}</button>
   {/if}

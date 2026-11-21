@@ -4,9 +4,29 @@ The dashboard checks for new releases when you open **Settings → Updates**.
 Nothing is sent about your server; set `DOCKLET_UPDATE_CHECK=off` to disable
 the check.
 
-## Container install (default)
+## Update now (container install)
 
-Re-run the installer:
+**Settings → Updates → Update now** upgrades from the dashboard. Leave the version empty for the latest release, or type one (e.g. `1.4.1`) to pin it or go back to an older one. Your password is required.
+
+1. Docklet writes a backup of its database and key to `self-backups/pre-upgrade-*.tar.gz` in the data volume (the three newest are kept). If the backup fails, nothing changes.
+2. It pulls `ghcr.io/monirujjaman-dev/docklet:<version>`. If the pull fails but the image is already on the server, that image is used.
+3. It starts a short-lived **updater** container from the *current* image. The updater:
+   - stops Docklet and renames its container to `docklet-old-<time>`;
+   - copies the SQLite files to `update/snapshot/`;
+   - creates the new container with the same settings: env, volumes, ports, networks and the pinned address `172.30.0.3`. Values that only came from the old image (entrypoint, image env and labels) are left to the new image.
+4. The updater waits up to 2 minutes for the new container to answer `/api/version` with the new version.
+   - **Healthy:** the old container is removed and `DOCKLET_VERSION` in `/opt/docklet/.env` is updated, so a later `docker compose up -d` or installer run keeps the version.
+   - **Not healthy** (it crashes, never answers, or reports another version): the updater records the last log lines, removes the new container, restores the database snapshot (the new version may have migrated it), and starts the previous container again.
+
+The page shows each step live, including while Docklet restarts. The result is kept in `update/status.json` in the data volume, so the version that runs afterwards shows how it went. Apps, databases and Caddy keep running throughout; only the dashboard is away for a few seconds.
+
+**Automatic patch updates** (optional, off by default): Docklet installs newer patch releases of the version it runs (1.4.0 → 1.4.2, never 1.5.0) during a one-hour maintenance window you pick (UTC). A version that rolled back is not retried automatically.
+
+Update now needs the container install. On a binary install, use `sudo docklet upgrade` (below).
+
+## Container install: re-run the installer
+
+You can always upgrade from a shell instead:
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/monirujjaman-dev/docklet/main/install.sh | sudo sh

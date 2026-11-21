@@ -10,6 +10,9 @@
   import Settings from "./pages/Settings.svelte";
   import Monitoring from "./pages/Monitoring.svelte";
   import Server from "./pages/Server.svelte";
+  import Terminal from "./pages/Terminal.svelte";
+  import Files from "./pages/Files.svelte";
+  import ReauthModal from "./lib/ReauthModal.svelte";
   import NewApp from "./pages/NewApp.svelte";
   import AppDetail from "./pages/AppDetail.svelte";
   import NewDatabase from "./pages/NewDatabase.svelte";
@@ -19,6 +22,8 @@
     { href: "/", label: "Projects" },
     { href: "/monitoring", label: "Monitoring" },
     { href: "/server", label: "Server" },
+    { href: "/terminal", label: "Terminal" },
+    { href: "/files", label: "Files" },
     { href: "/audit", label: "Audit log" },
     { href: "/settings", label: "Settings" },
     { href: "/account", label: "Account" },
@@ -82,6 +87,10 @@
         <Monitoring />
       {:else if router.path.startsWith("/server")}
         <Server />
+      {:else if router.path.startsWith("/terminal")}
+        <Terminal />
+      {:else if router.path.startsWith("/files")}
+        <Files />
       {:else if router.path.startsWith("/audit")}
         <Audit />
       {:else if router.path.startsWith("/settings")}
@@ -93,4 +102,5 @@
       {/if}
     </main>
   </div>
+  <ReauthModal />
 {/if}
