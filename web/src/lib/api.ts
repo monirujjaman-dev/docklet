@@ -202,6 +202,9 @@ export type Backup = {
   startedAt: number;
   finishedAt?: number;
   file?: string;
+  local: boolean;
+  remoteStatus?: "uploading" | "uploaded" | "failed";
+  remoteError?: string;
 };
 
 export type DatabaseDetail = DbSummary & {
@@ -219,6 +222,9 @@ export type DatabaseDetail = DbSummary & {
   apps: { id: number; name: string }[];
   backups: Backup[];
   createdAt: number;
+  backupDestinationId: number | null;
+  users: DbUser[];
+  roles: string[];
 };
 
 export type EngineInfo = { name: string; label: string; versions: string[]; port: number; envKey: string };
@@ -247,4 +253,32 @@ export type CronJob = {
   enabled: boolean;
   nextRunAt?: number;
   lastRun?: CronRun;
+};
+
+export type Destination = {
+  id: number;
+  name: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  accessKey: string;
+  pathStyle: boolean;
+  lastTestAt?: number;
+  lastTestError?: string;
+  usedBy: number;
+};
+
+export type DbUser = { id: number; username: string; role: "readonly" | "readwrite" | "admin"; createdAt: number; updatedAt: number };
+
+export type SelfBackupPolicy = {
+  destinationId: number | null;
+  schedule: "off" | "daily" | "weekly";
+  keep: number;
+  includeDatabaseBackups: boolean;
+  hasPassphrase: boolean;
+  lastAt?: number;
+  lastError?: string;
+  lastKey?: string;
+  running: boolean;
 };

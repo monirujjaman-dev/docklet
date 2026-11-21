@@ -73,6 +73,10 @@ func (s *Service) backup(ctx context.Context, id int64, trigger string) (db.Back
 	if derr != nil {
 		return b, derr
 	}
+	if err := s.upload(ctx, d, b); err != nil {
+		s.log.Warn("upload backup", "database", d.Name, "backup", b.ID, "err", err)
+	}
+	b, _ = s.st.Q.GetBackup(context.WithoutCancel(ctx), b.ID)
 	s.prune(ctx, d)
 	return b, nil
 }
@@ -187,16 +191,9 @@ func (s *Service) prune(ctx context.Context, d db.Database) {
 		if b.File != "" {
 			_ = os.Remove(s.backupPath(b.File))
 		}
+		s.deleteRemote(ctx, b)
 		_ = s.st.Q.DeleteBackup(ctx, b.ID)
 	}
-}
-
-// OpenBackup opens a backup file for download.
-func (s *Service) OpenBackup(b db.Backup) (*os.File, error) {
-	if b.Status != "succeeded" || b.File == "" {
-		return nil, errors.New("backup has no file")
-	}
-	return os.Open(s.backupPath(b.File)) // #nosec G304 -- path from our own row
 }
 
 // Restore replaces the database's contents with a backup. A pre-restore
@@ -218,7 +215,11 @@ func (s *Service) Restore(ctx context.Context, id, backupID int64) (pre db.Backu
 	if err != nil {
 		return pre, err
 	}
-	rerr := s.load(ctx, d, b)
+	cleanup, rerr := s.fetchLocal(ctx, b)
+	if rerr == nil {
+		rerr = s.load(ctx, d, b)
+		cleanup()
+	}
 	action, details := audit.ActionRestoreSucceeded, map[string]any{"backup": b.ID, "preRestoreBackup": pre.ID}
 	if rerr != nil {
 		action, details["error"] = audit.ActionRestoreFailed, rerr.Error()

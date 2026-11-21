@@ -51,15 +51,19 @@ type AuditLog struct {
 }
 
 type Backup struct {
-	ID         int64
-	DatabaseID int64
-	Trigger    string
-	Status     string
-	File       string
-	SizeBytes  int64
-	Error      string
-	StartedAt  int64
-	FinishedAt int64
+	ID            int64
+	DatabaseID    int64
+	Trigger       string
+	Status        string
+	File          string
+	SizeBytes     int64
+	Error         string
+	StartedAt     int64
+	FinishedAt    int64
+	DestinationID sql.NullInt64
+	RemoteKey     string
+	RemoteStatus  string
+	RemoteError   string
 }
 
 type CronJob struct {
@@ -92,25 +96,26 @@ type CronRun struct {
 }
 
 type Database struct {
-	ID              int64
-	ProjectID       int64
-	Name            string
-	Engine          string
-	Version         string
-	DbName          string
-	Username        string
-	PasswordEnc     []byte
-	RootPasswordEnc []byte
-	MemoryMb        int64
-	PublicPort      int64
-	ContainerID     string
-	DesiredStatus   string
-	RuntimeStatus   string
-	RuntimeMessage  string
-	BackupSchedule  string
-	BackupKeep      int64
-	CreatedAt       int64
-	UpdatedAt       int64
+	ID                  int64
+	ProjectID           int64
+	Name                string
+	Engine              string
+	Version             string
+	DbName              string
+	Username            string
+	PasswordEnc         []byte
+	RootPasswordEnc     []byte
+	MemoryMb            int64
+	PublicPort          int64
+	ContainerID         string
+	DesiredStatus       string
+	RuntimeStatus       string
+	RuntimeMessage      string
+	BackupSchedule      string
+	BackupKeep          int64
+	CreatedAt           int64
+	UpdatedAt           int64
+	BackupDestinationID sql.NullInt64
 }
 
 type DatabaseLink struct {
@@ -118,6 +123,16 @@ type DatabaseLink struct {
 	AppID      int64
 	EnvKey     string
 	CreatedAt  int64
+}
+
+type DatabaseUser struct {
+	ID          int64
+	DatabaseID  int64
+	Username    string
+	PasswordEnc []byte
+	Role        string
+	CreatedAt   int64
+	UpdatedAt   int64
 }
 
 type Deployment struct {
@@ -185,6 +200,22 @@ type Project struct {
 	ID        int64
 	Name      string
 	CreatedAt int64
+}
+
+type S3Destination struct {
+	ID            int64
+	Name          string
+	Endpoint      string
+	Region        string
+	Bucket        string
+	Prefix        string
+	AccessKey     string
+	SecretEnc     []byte
+	PathStyle     int64
+	LastTestAt    int64
+	LastTestError string
+	CreatedAt     int64
+	UpdatedAt     int64
 }
 
 type Session struct {

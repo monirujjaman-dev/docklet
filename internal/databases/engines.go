@@ -29,6 +29,7 @@ type Engine struct {
 // Creds are the decrypted credentials of a database.
 type Creds struct {
 	DBName, User, Password, RootPassword string
+	extraUser                            bool // a database user, not the built-in owner
 }
 
 // Engines lists supported engines by name.
@@ -115,7 +116,11 @@ func (e *Engine) URL(host string, c Creds) string {
 	case "redis":
 		// "default" is Redis's built-in ACL user; an empty username makes
 		// some clients (redis-cli among them) send AUTH "" <pw>, which fails.
-		u.User = url.UserPassword("default", c.Password)
+		user := "default"
+		if c.extraUser {
+			user = c.User
+		}
+		u.User = url.UserPassword(user, c.Password)
 		u.Path = "/0"
 	case "postgres":
 		u.User = url.UserPassword(c.User, c.Password)

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { api, apiDownload, type UpdateInfo } from "./api";
+  import { onMount } from "svelte";
+  import { api, apiDownload, type Destination, type SelfBackupPolicy, type UpdateInfo } from "./api";
 
   // --- Backup ---
   let password = $state("");
@@ -32,6 +33,66 @@
       busy = false;
     }
   }
+
+  // --- Scheduled backups to S3 ---
+  let policy = $state<SelfBackupPolicy | null>(null);
+  let dests = $state<Destination[]>([]);
+  let remote = $state<{ key: string; size: number; lastModified: string }[]>([]);
+  let sched = $state({ destinationId: "", schedule: "off", keep: "7", includeDatabaseBackups: false, passphrase: "", password: "" });
+  let schedMsg = $state("");
+  let schedErr = $state("");
+
+  async function loadPolicy() {
+    try {
+      policy = await api<SelfBackupPolicy>("/system/backup-schedule");
+      dests = (await api<{ destinations: Destination[] }>("/destinations")).destinations;
+      if (policy.destinationId) remote = (await api<{ backups: typeof remote }>("/system/remote-backups")).backups;
+    } catch {
+      /* shown when saving */
+    }
+  }
+  onMount(async () => {
+    await loadPolicy();
+    if (policy) {
+      sched.destinationId = policy.destinationId ? String(policy.destinationId) : "";
+      sched.schedule = policy.schedule;
+      sched.keep = String(policy.keep);
+      sched.includeDatabaseBackups = policy.includeDatabaseBackups;
+    }
+  });
+
+  async function saveSchedule(e: SubmitEvent) {
+    e.preventDefault();
+    schedErr = schedMsg = "";
+    try {
+      policy = await api<SelfBackupPolicy>("/system/backup-schedule", {
+        method: "PUT",
+        json: { ...sched, destinationId: sched.destinationId ? Number(sched.destinationId) : null, keep: Number(sched.keep) },
+      });
+      schedMsg = sched.passphrase ? "Saved. Keep the passphrase somewhere safe: it is needed to restore these backups." : "Saved.";
+      sched.passphrase = sched.password = "";
+    } catch (err) {
+      schedErr = err instanceof Error ? err.message : String(err);
+    }
+  }
+  async function runNow() {
+    schedErr = schedMsg = "";
+    try {
+      await api("/system/backup-schedule/run", { method: "POST" });
+      schedMsg = "Backing up…";
+      const t = setInterval(async () => {
+        await loadPolicy();
+        if (policy && !policy.running) {
+          clearInterval(t);
+          schedMsg = policy.lastError ? "" : "Uploaded " + (policy.lastKey ?? "");
+          schedErr = policy.lastError ?? "";
+        }
+      }, 1500);
+    } catch (err) {
+      schedErr = err instanceof Error ? err.message : String(err);
+    }
+  }
+  const mb = (n: number) => (n / 1048576).toFixed(1) + " MB";
 
   // --- Updates ---
   let upd = $state<UpdateInfo | null>(null);
@@ -78,6 +139,51 @@
     {#if error}<p class="text-sm text-red-400 md:col-span-2">{error}</p>{/if}
     {#if msg}<p class="text-sm text-emerald-300 md:col-span-2">{msg}</p>{/if}
   </form>
+</section>
+
+<section class="max-w-2xl space-y-4 mt-12 pt-8 border-t border-neutral-800">
+  <div>
+    <h2 class="font-medium">Scheduled backups to S3</h2>
+    <p class="text-sm text-neutral-400 mt-1">Uploads an encrypted Docklet backup to a destination on a schedule, so the panel can be rebuilt if this server is lost.</p>
+  </div>
+  {#if dests.length === 0}
+    <p class="text-sm text-neutral-500">Add a backup destination above first.</p>
+  {:else}
+    <form onsubmit={saveSchedule} class="grid gap-3 md:grid-cols-3">
+      <label class="text-sm">Destination
+        <select bind:value={sched.destinationId} class="mt-1 {input}">
+          <option value="">None</option>
+          {#each dests as d}<option value={String(d.id)}>{d.name}</option>{/each}
+        </select></label>
+      <label class="text-sm">Schedule
+        <select bind:value={sched.schedule} class="mt-1 {input}"><option value="off">Off</option><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+      <label class="text-sm">Keep<input bind:value={sched.keep} inputmode="numeric" class="mt-1 {input}" /></label>
+      <label class="text-sm md:col-span-2">Encryption passphrase
+        <input type="password" bind:value={sched.passphrase} autocomplete="new-password" placeholder={policy?.hasPassphrase ? "unchanged" : "at least 12 characters"} class="mt-1 {input}" /></label>
+      <label class="text-sm">Your password<input type="password" bind:value={sched.password} autocomplete="current-password" class="mt-1 {input}" /></label>
+      <label class="flex items-center gap-2 text-sm text-neutral-300 md:col-span-3">
+        <input type="checkbox" bind:checked={sched.includeDatabaseBackups} /> Include the newest backup of each managed database</label>
+      <div class="md:col-span-3 flex gap-2">
+        <button disabled={!sched.password} class="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3 py-1.5 text-sm font-medium">Save</button>
+        <button type="button" onclick={runNow} disabled={!policy?.destinationId || !policy?.hasPassphrase || policy?.running} class="rounded-md border border-neutral-700 hover:border-neutral-500 px-3 py-1.5 text-sm disabled:opacity-50">Back up now</button>
+      </div>
+    </form>
+    {#if schedErr}<p class="text-sm text-red-400">{schedErr}</p>{/if}
+    {#if schedMsg}<p class="text-sm text-emerald-300">{schedMsg}</p>{/if}
+    {#if policy?.lastAt}
+      <p class="text-xs {policy.lastError ? 'text-red-400' : 'text-neutral-500'}">
+        Last run {new Date(policy.lastAt * 1000).toLocaleString()}: {policy.lastError || "uploaded " + policy.lastKey}
+      </p>
+    {/if}
+    {#if remote.length}
+      <div class="rounded-md border border-neutral-800 divide-y divide-neutral-800 text-xs">
+        {#each remote as o}
+          <div class="flex justify-between px-3 py-1.5"><span class="font-mono">{o.key}</span><span class="text-neutral-500">{mb(o.size)}</span></div>
+        {/each}
+      </div>
+      <p class="text-xs text-neutral-500">To restore one, download it from the bucket and run <span class="font-mono">docklet restore</span> (docs/backup.md).</p>
+    {/if}
+  {/if}
 </section>
 
 <section class="max-w-2xl space-y-3 mt-12 pt-8 border-t border-neutral-800">

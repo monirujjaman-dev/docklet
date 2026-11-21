@@ -21,7 +21,7 @@ func (q *Queries) CountProjectDatabases(ctx context.Context, projectID int64) (i
 }
 
 const createBackup = `-- name: CreateBackup :one
-INSERT INTO backups (database_id, trigger, started_at) VALUES (?, ?, ?) RETURNING id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at
+INSERT INTO backups (database_id, trigger, started_at) VALUES (?, ?, ?) RETURNING id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at, destination_id, remote_key, remote_status, remote_error
 `
 
 type CreateBackupParams struct {
@@ -43,6 +43,10 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		&i.Error,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.DestinationID,
+		&i.RemoteKey,
+		&i.RemoteStatus,
+		&i.RemoteError,
 	)
 	return i, err
 }
@@ -51,7 +55,7 @@ const createDatabase = `-- name: CreateDatabase :one
 INSERT INTO databases (project_id, name, engine, version, db_name, username, password_enc, root_password_enc,
                        memory_mb, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at
+RETURNING id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id
 `
 
 type CreateDatabaseParams struct {
@@ -103,6 +107,7 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		&i.BackupKeep,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BackupDestinationID,
 	)
 	return i, err
 }
@@ -177,7 +182,7 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) erro
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at FROM backups WHERE id = ?
+SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at, destination_id, remote_key, remote_status, remote_error FROM backups WHERE id = ?
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
@@ -193,12 +198,16 @@ func (q *Queries) GetBackup(ctx context.Context, id int64) (Backup, error) {
 		&i.Error,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.DestinationID,
+		&i.RemoteKey,
+		&i.RemoteStatus,
+		&i.RemoteError,
 	)
 	return i, err
 }
 
 const getDatabase = `-- name: GetDatabase :one
-SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at FROM databases WHERE id = ?
+SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id FROM databases WHERE id = ?
 `
 
 func (q *Queries) GetDatabase(ctx context.Context, id int64) (Database, error) {
@@ -224,6 +233,7 @@ func (q *Queries) GetDatabase(ctx context.Context, id int64) (Database, error) {
 		&i.BackupKeep,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BackupDestinationID,
 	)
 	return i, err
 }
@@ -242,7 +252,7 @@ func (q *Queries) LastBackupTime(ctx context.Context, databaseID int64) (int64, 
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at FROM backups WHERE database_id = ? ORDER BY id DESC LIMIT ?
+SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at, destination_id, remote_key, remote_status, remote_error FROM backups WHERE database_id = ? ORDER BY id DESC LIMIT ?
 `
 
 type ListBackupsParams struct {
@@ -269,6 +279,10 @@ func (q *Queries) ListBackups(ctx context.Context, arg ListBackupsParams) ([]Bac
 			&i.Error,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.DestinationID,
+			&i.RemoteKey,
+			&i.RemoteStatus,
+			&i.RemoteError,
 		); err != nil {
 			return nil, err
 		}
@@ -319,7 +333,7 @@ func (q *Queries) ListDatabaseLinks(ctx context.Context, databaseID int64) ([]Li
 }
 
 const listDatabases = `-- name: ListDatabases :many
-SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at FROM databases ORDER BY project_id, name
+SELECT id, project_id, name, engine, version, db_name, username, password_enc, root_password_enc, memory_mb, public_port, container_id, desired_status, runtime_status, runtime_message, backup_schedule, backup_keep, created_at, updated_at, backup_destination_id FROM databases ORDER BY project_id, name
 `
 
 func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
@@ -351,6 +365,7 @@ func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
 			&i.BackupKeep,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BackupDestinationID,
 		); err != nil {
 			return nil, err
 		}
@@ -366,7 +381,7 @@ func (q *Queries) ListDatabases(ctx context.Context) ([]Database, error) {
 }
 
 const listExpiredBackups = `-- name: ListExpiredBackups :many
-SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at FROM backups WHERE database_id = ?1 AND status = 'succeeded'
+SELECT id, database_id, "trigger", status, file, size_bytes, error, started_at, finished_at, destination_id, remote_key, remote_status, remote_error FROM backups WHERE database_id = ?1 AND status = 'succeeded'
 ORDER BY id DESC LIMIT -1 OFFSET ?2
 `
 
@@ -395,6 +410,10 @@ func (q *Queries) ListExpiredBackups(ctx context.Context, arg ListExpiredBackups
 			&i.Error,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.DestinationID,
+			&i.RemoteKey,
+			&i.RemoteStatus,
+			&i.RemoteError,
 		); err != nil {
 			return nil, err
 		}

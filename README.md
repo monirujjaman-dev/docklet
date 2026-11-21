@@ -98,6 +98,9 @@ Builds without a Dockerfile (Railpack) are not supported yet.
 - **Restore.** Restoring first takes a safety `pre-restore` backup and aborts if that fails.
 - **Download.** Any backup can be downloaded from the dashboard.
 
+- **S3.** Backups can also go to any S3-compatible bucket (AWS, R2, B2, Wasabi, Spaces, MinIO…), with retention on both sides; restore and download fall back to the bucket. Docklet's own encrypted backup can be scheduled to S3 too ([docs/backup.md](docs/backup.md#off-site-backups-to-s3)).
+- **Users.** Extra users per database, with *read-only*, *read & write* (data only) or *admin* (all data plus creating tables; in PostgreSQL an admin can alter or drop only the tables it created) permissions, generated passwords and a connection URL each. PostgreSQL roles and grants, MySQL/MariaDB grants, and Redis ACL users (re-applied after a restart) are all supported.
+
 A database name is unique per project, across both apps and databases, since both are DNS names on the same network. Deleting a database keeps its volume and backups unless you choose to delete the data too.
 
 ### Workers and cron jobs
