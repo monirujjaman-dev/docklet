@@ -157,3 +157,73 @@ func TestRealDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRealExecAndArchive needs DOCKLET_TEST_DOCKER=1 and the local images
+// docklet-test/hello:v1 and docklet-test/probe (a binary that prints and exits).
+func TestRealExecAndArchive(t *testing.T) {
+	if os.Getenv("DOCKLET_TEST_DOCKER") == "" {
+		t.Skip("set DOCKLET_TEST_DOCKER=1")
+	}
+	c := New("/var/run/docker.sock")
+	ctx := context.Background()
+	vol := "docklet-test-vol"
+	if err := c.VolumeCreate(ctx, vol, map[string]string{"docklet.test": "1"}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.VolumeRemove(ctx, vol) }()
+	id, err := c.ContainerCreate(ctx, ContainerSpec{
+		Name: "docklet-test-exec", Image: "docklet-test/hello:v1", Network: "bridge", RestartPolicy: "no",
+		Volumes: map[string]string{vol: "/data"}, Publish: map[int]int{8080: 18089},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.ContainerRemove(ctx, id) }()
+	if err := c.ContainerStart(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := strings.Repeat("backup-bytes ", 1000)
+	if err := c.CopyTo(ctx, id, "/data", "dump.bin", strings.NewReader(payload), int64(len(payload)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	n, err := c.CopyFrom(ctx, id, "/data/dump.bin", &out)
+	if err != nil || n != int64(len(payload)) || out.String() != payload {
+		t.Fatalf("copy round trip: n=%d err=%v", n, err)
+	}
+
+	// Published port reaches the container from the host.
+	time.Sleep(300 * time.Millisecond)
+	if res, err := http.Get("http://127.0.0.1:18089/"); err != nil {
+		t.Fatalf("published port: %v", err)
+	} else {
+		_ = res.Body.Close()
+	}
+
+	// Exec: the hello image has no shell; running its binary again prints a
+	// line and exits at once because port 8080 is taken.
+	var stdout bytes.Buffer
+	res, err := c.Exec(ctx, id, []string{"/app"}, []string{"APP_VERSION=exec"}, &stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(stdout.String(), "version exec") {
+		t.Fatalf("exec: exit=%d stdout=%q stderr=%q", res.ExitCode, stdout.String(), res.Stderr)
+	}
+
+	// Volume data survives recreating the container.
+	_ = c.ContainerRemove(ctx, id)
+	id2, err := c.ContainerCreate(ctx, ContainerSpec{
+		Name: "docklet-test-exec2", Image: "docklet-test/hello:v1", Network: "bridge", RestartPolicy: "no",
+		Volumes: map[string]string{vol: "/data"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.ContainerRemove(ctx, id2) }()
+	out.Reset()
+	if _, err := c.CopyFrom(ctx, id2, "/data/dump.bin", &out); err != nil || out.String() != payload {
+		t.Fatalf("volume lost data: %v", err)
+	}
+}

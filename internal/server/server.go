@@ -8,11 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/monirujjaman-dev/docklet/internal/apps"
 	"github.com/monirujjaman-dev/docklet/internal/caddy"
+	"github.com/monirujjaman-dev/docklet/internal/databases"
 	"github.com/monirujjaman-dev/docklet/internal/metrics"
 	"github.com/monirujjaman-dev/docklet/internal/secrets"
 	"github.com/monirujjaman-dev/docklet/internal/store"
@@ -35,6 +38,8 @@ type Config struct {
 	// TrustedProxies are peers (besides loopback) whose X-Forwarded-For and
 	// X-Forwarded-Proto headers are honoured, e.g. the Caddy container.
 	TrustedProxies []netip.Prefix
+	// BackupDir stores database backups (default: a "backups" dir next to the DB).
+	BackupDir string
 }
 
 // Server is the Docklet control-plane HTTP server.
@@ -56,6 +61,8 @@ type Server struct {
 
 	docker   apps.Docker
 	appsTune func(*apps.Service)
+	dbs      *databases.Service
+	dbsTune  func(*databases.Service)
 	apps     *apps.Service
 	metrics  *metrics.Collector
 
@@ -93,6 +100,11 @@ func WithDocker(d apps.Docker) Option { return func(s *Server) { s.docker = d } 
 // WithAppsTuning adjusts the apps service (timeouts etc.), mainly for tests.
 func WithAppsTuning(fn func(*apps.Service)) Option { return func(s *Server) { s.appsTune = fn } }
 
+// WithDatabasesTuning adjusts the databases service (tests).
+func WithDatabasesTuning(fn func(*databases.Service)) Option {
+	return func(s *Server) { s.dbsTune = fn }
+}
+
 // WithMetrics enables the monitoring endpoints and runs the collector.
 func WithMetrics(c *metrics.Collector) Option { return func(s *Server) { s.metrics = c } }
 
@@ -126,6 +138,19 @@ func New(cfg Config, log *slog.Logger, st *store.Store, box *secrets.Box, opts .
 		s.apps.SetClock(s.now)
 		if s.appsTune != nil {
 			s.appsTune(s.apps)
+		}
+		if dk, ok := s.docker.(databases.Docker); ok {
+			dir := cfg.BackupDir
+			if dir == "" {
+				dir = filepath.Join(os.TempDir(), "docklet-backups")
+			}
+			s.dbs = databases.New(st, dk, box, log, dir)
+			s.dbs.SetClock(s.now)
+			s.dbs.EnsureNetwork = s.apps.EnsureNetwork
+			s.dbs.SealEnv = s.apps.SealEnv
+			if s.dbsTune != nil {
+				s.dbsTune(s.dbs)
+			}
 		}
 	}
 	// 10 attempts per minute per IP for login/setup, on top of per-account lockout.
@@ -196,6 +221,23 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/rollback", authed(s.handleRollback))
 	mux.HandleFunc("POST /api/webhooks/{token}", h(s.handleWebhook))
 
+	mux.HandleFunc("GET /api/databases/engines", authed(s.handleEngines))
+	mux.HandleFunc("POST /api/projects/{id}/databases", authed(s.handleCreateDatabase))
+	mux.HandleFunc("GET /api/databases/{id}", authed(s.handleGetDatabase))
+	mux.HandleFunc("DELETE /api/databases/{id}", authed(s.handleDeleteDatabase))
+	mux.HandleFunc("GET /api/databases/{id}/credentials", authed(s.handleDatabaseCredentials))
+	mux.HandleFunc("POST /api/databases/{id}/start", authed(s.handleDatabaseLifecycle("start")))
+	mux.HandleFunc("POST /api/databases/{id}/stop", authed(s.handleDatabaseLifecycle("stop")))
+	mux.HandleFunc("POST /api/databases/{id}/restart", authed(s.handleDatabaseLifecycle("restart")))
+	mux.HandleFunc("POST /api/databases/{id}/recreate", authed(s.handleDatabaseLifecycle("recreate")))
+	mux.HandleFunc("PUT /api/databases/{id}/public", authed(s.handleDatabasePublic))
+	mux.HandleFunc("PUT /api/databases/{id}/backup-policy", authed(s.handleBackupPolicy))
+	mux.HandleFunc("POST /api/databases/{id}/backups", authed(s.handleCreateBackup))
+	mux.HandleFunc("POST /api/databases/{id}/restore", authed(s.handleRestore))
+	mux.HandleFunc("POST /api/databases/{id}/links", authed(s.handleLinkDatabase))
+	mux.HandleFunc("DELETE /api/databases/{id}/links/{appId}", authed(s.handleUnlinkDatabase))
+	mux.HandleFunc("GET /api/backups/{id}/download", authed(s.handleDownloadBackup))
+
 	mux.HandleFunc("GET /api/metrics/status", authed(s.handleMetricsStatus))
 	mux.HandleFunc("GET /api/metrics/recent", authed(s.handleMetricsRecent))
 	mux.HandleFunc("GET /api/metrics/history", authed(s.handleMetricsHistory))
@@ -241,6 +283,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.apps != nil {
 		go s.apps.Run(ctx)
+	}
+	if s.dbs != nil {
+		go s.dbs.Run(ctx)
 	}
 	metricsDone := make(chan struct{})
 	if s.metrics != nil {

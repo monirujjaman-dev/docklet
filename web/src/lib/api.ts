@@ -91,7 +91,7 @@ export type AppSummary = {
   domains: string[];
 };
 
-export type Project = { id: number; name: string; createdAt: number; apps: AppSummary[] };
+export type Project = { id: number; name: string; createdAt: number; apps: AppSummary[]; databases: DbSummary[] };
 
 export type Deployment = {
   id: number;
@@ -137,3 +137,45 @@ export type AppDetail = AppSummary & {
   git?: GitConfig;
   buildsAvailable: boolean;
 };
+
+export type DbSummary = {
+  id: number;
+  projectId: number;
+  name: string;
+  engine: string;
+  engineLabel: string;
+  version: string;
+  runtimeStatus: string;
+  runtimeMessage?: string;
+  publicPort?: number;
+};
+
+export type Backup = {
+  id: number;
+  trigger: "manual" | "schedule" | "pre-restore";
+  status: "running" | "succeeded" | "failed";
+  sizeBytes: number;
+  error?: string;
+  startedAt: number;
+  finishedAt?: number;
+  file?: string;
+};
+
+export type DatabaseDetail = DbSummary & {
+  projectName: string;
+  host: string;
+  port: number;
+  dbName?: string;
+  username?: string;
+  memoryMb: number;
+  desiredStatus: string;
+  backupSchedule: "off" | "hourly" | "daily" | "weekly";
+  backupKeep: number;
+  defaultEnvKey: string;
+  links: { appId: number; appName: string; envKey: string }[];
+  apps: { id: number; name: string }[];
+  backups: Backup[];
+  createdAt: number;
+};
+
+export type EngineInfo = { name: string; label: string; versions: string[]; port: number; envKey: string };

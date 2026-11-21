@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -15,6 +16,7 @@ import (
 
 // Container is a fake container.
 type Container struct {
+	files   map[string][]byte
 	Spec    docker.ContainerSpec
 	running bool
 	ip      string
@@ -29,6 +31,8 @@ type Fake struct {
 	containers map[string]*Container
 	networks   map[string]bool
 	attached   map[string]bool
+	volumes    map[string]map[string][]byte
+	exec       ExecFunc
 	seq        int
 }
 
@@ -49,7 +53,9 @@ func (f *Fake) ImagePull(_ context.Context, ref string, p func(string)) error {
 	if strings.Contains(ref, "nopull") || strings.Contains(ref, "missing") {
 		return errors.New("registry unreachable")
 	}
-	p("Pull complete")
+	if p != nil {
+		p("Pull complete")
+	}
 	return nil
 }
 func (f *Fake) ImageInspect(_ context.Context, ref string) (docker.Image, error) {
@@ -242,4 +248,131 @@ func (f *Fake) Count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.containers)
+}
+
+// ExecFunc emulates a command inside a container. It may read and write the
+// container's files through f.ReadFile / f.WriteFile.
+type ExecFunc func(f *Fake, containerID string, cmd, env []string, stdout io.Writer) (exitCode int, stderr string)
+
+// SetExec installs the exec emulation.
+func (f *Fake) SetExec(fn ExecFunc) {
+	f.mu.Lock()
+	f.exec = fn
+	f.mu.Unlock()
+}
+
+// VolumeCreate implements the Docker client method.
+func (f *Fake) VolumeCreate(_ context.Context, name string, _ map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.volumes == nil {
+		f.volumes = map[string]map[string][]byte{}
+	}
+	if f.volumes[name] == nil {
+		f.volumes[name] = map[string][]byte{}
+	}
+	return nil
+}
+
+// VolumeRemove implements the Docker client method.
+func (f *Fake) VolumeRemove(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.volumes, name)
+	return nil
+}
+
+// HasVolume reports whether a volume exists.
+func (f *Fake) HasVolume(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.volumes[name]
+	return ok
+}
+
+// Exec implements the Docker client method using SetExec's function.
+func (f *Fake) Exec(_ context.Context, id string, cmd, env []string, stdout io.Writer) (docker.ExecResult, error) {
+	f.mu.Lock()
+	c, err := f.get(id)
+	fn := f.exec
+	f.mu.Unlock()
+	if err != nil {
+		return docker.ExecResult{}, err
+	}
+	if !c.running {
+		return docker.ExecResult{}, fmt.Errorf("%w: container is not running", docker.ErrConflict)
+	}
+	if fn == nil {
+		return docker.ExecResult{}, nil
+	}
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	code, stderr := fn(f, id, cmd, env, stdout)
+	return docker.ExecResult{ExitCode: code, Stderr: stderr}, nil
+}
+
+// storage returns the map holding path inside a container: a volume when
+// path is under a mount, otherwise the container's own filesystem.
+func (f *Fake) storage(c *Container, path string) (map[string][]byte, string) {
+	for vol, target := range c.Spec.Volumes {
+		if path == target || strings.HasPrefix(path, target+"/") {
+			if f.volumes == nil {
+				f.volumes = map[string]map[string][]byte{}
+			}
+			if f.volumes[vol] == nil {
+				f.volumes[vol] = map[string][]byte{}
+			}
+			return f.volumes[vol], path
+		}
+	}
+	if c.files == nil {
+		c.files = map[string][]byte{}
+	}
+	return c.files, path
+}
+
+// WriteFile stores a file inside a container (for ExecFunc emulations).
+func (f *Fake) WriteFile(id, path string, data []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, err := f.get(id)
+	if err != nil {
+		return err
+	}
+	m, p := f.storage(c, path)
+	m[p] = append([]byte(nil), data...)
+	return nil
+}
+
+// ReadFile reads a file inside a container.
+func (f *Fake) ReadFile(id, path string) ([]byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, err := f.get(id)
+	if err != nil {
+		return nil, false
+	}
+	m, p := f.storage(c, path)
+	b, ok := m[p]
+	return b, ok
+}
+
+// CopyTo implements the Docker client method.
+func (f *Fake) CopyTo(_ context.Context, id, dir, name string, content io.Reader, _ int64, _ int64) error {
+	b, err := io.ReadAll(content)
+	if err != nil {
+		return err
+	}
+	return f.WriteFile(id, strings.TrimSuffix(dir, "/")+"/"+name, b)
+}
+
+// CopyFrom implements the Docker client method.
+func (f *Fake) CopyFrom(_ context.Context, id, path string, w io.Writer) (int64, error) {
+	b, ok := f.ReadFile(id, path)
+	if !ok {
+		return 0, docker.ErrNotFound
+	}
+	n, err := w.Write(b)
+	return int64(n), err
 }

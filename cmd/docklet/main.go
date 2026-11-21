@@ -146,7 +146,10 @@ func cmdServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid -trusted-proxies: %v\n", err)
 		return 2
 	}
-	cfg := server.Config{Addr: *addr, CaddyAdmin: *caddyAdmin, PanelUpstream: *panelUpstream, TrustedProxies: proxies}
+	cfg := server.Config{
+		Addr: *addr, CaddyAdmin: *caddyAdmin, PanelUpstream: *panelUpstream, TrustedProxies: proxies,
+		BackupDir: filepath.Join(*dataDir, "backups"),
+	}
 	if *caddyAdmin == "off" {
 		cfg.CaddyAdmin = ""
 	}

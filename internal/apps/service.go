@@ -132,6 +132,11 @@ func tcpCheck(ctx context.Context, ip string, port int) error {
 	return c.Close()
 }
 
+// EnsureNetwork creates the project network (shared with databases).
+func (s *Service) EnsureNetwork(ctx context.Context, projectID int64) (string, error) {
+	return s.ensureNetwork(ctx, projectID)
+}
+
 // ensureNetwork creates the project network and attaches AttachContainers.
 func (s *Service) ensureNetwork(ctx context.Context, projectID int64) (string, error) {
 	network := NetworkName(projectID)

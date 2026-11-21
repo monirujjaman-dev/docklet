@@ -59,6 +59,26 @@ const (
 	ActionAppDeployKey      = "app.deploy_key_regenerated" // #nosec G101 -- audit action name, not a credential
 	ActionAppWebhookRotated = "app.webhook_rotated"        //nolint:gosec // audit action name, not a credential
 	ActionAppRollback       = "app.rollback_requested"
+
+	ActionDatabaseCreated    = "database.created"
+	ActionDatabaseReady      = "database.ready"
+	ActionDatabaseFailed     = "database.failed"
+	ActionDatabaseDeleted    = "database.deleted"
+	ActionDatabaseStarted    = "database.started"
+	ActionDatabaseStopped    = "database.stopped"
+	ActionDatabaseRestarted  = "database.restarted"
+	ActionDatabaseRecreated  = "database.recreated"
+	ActionDatabasePublicPort = "database.public_port_changed"
+	ActionDatabaseRevealed   = "database.credentials_viewed"
+	ActionDatabaseLinked     = "database.linked"
+	ActionDatabaseUnlinked   = "database.unlinked"
+	ActionBackupPolicy       = "database.backup_policy_changed"
+	ActionBackupRequested    = "database.backup_requested"
+	ActionBackupSucceeded    = "database.backup_succeeded"
+	ActionBackupFailed       = "database.backup_failed"
+	ActionRestoreRequested   = "database.restore_requested"
+	ActionRestoreSucceeded   = "database.restore_succeeded"
+	ActionRestoreFailed      = "database.restore_failed"
 )
 
 // Entry is what callers provide; ID, Ts and hashes are filled by Append.

@@ -82,13 +82,18 @@
             use:link
             class="rounded-md border border-neutral-700 hover:border-neutral-500 px-2.5 py-1">New app</a
           >
-          {#if p.apps.length === 0}
+          <a
+            href="/projects/{p.id}/new-database"
+            use:link
+            class="rounded-md border border-neutral-700 hover:border-neutral-500 px-2.5 py-1">New database</a
+          >
+          {#if p.apps.length === 0 && p.databases.length === 0}
             <button onclick={() => deleteProject(p)} class="text-neutral-500 hover:text-red-300 px-2">Delete</button>
           {/if}
         </div>
       </header>
-      {#if p.apps.length === 0}
-        <p class="px-4 py-4 text-sm text-neutral-500">No apps in this project.</p>
+      {#if p.apps.length === 0 && p.databases.length === 0}
+        <p class="px-4 py-4 text-sm text-neutral-500">No apps or databases in this project.</p>
       {:else}
         <ul>
           {#each p.apps as a (a.id)}
@@ -101,6 +106,19 @@
                 <StatusBadge status={a.runtimeStatus} />
                 <span class="text-xs text-neutral-500 font-mono truncate flex-1">{a.image}</span>
                 <span class="text-xs text-neutral-400 truncate">{a.domains.join(", ")}</span>
+              </button>
+            </li>
+          {/each}
+          {#each p.databases as d (d.id)}
+            <li class="border-t border-neutral-900 first:border-t-0">
+              <button
+                onclick={() => router.go(`/databases/${d.id}`)}
+                class="w-full text-left px-4 py-3 hover:bg-neutral-900 flex items-center gap-4"
+              >
+                <span class="font-medium w-40 truncate">{d.name}</span>
+                <StatusBadge status={d.runtimeStatus} />
+                <span class="text-xs text-neutral-500 truncate flex-1">{d.engineLabel} {d.version}</span>
+                {#if d.publicPort}<span class="text-xs text-amber-300">public :{d.publicPort}</span>{/if}
               </button>
             </li>
           {/each}
